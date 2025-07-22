@@ -6,57 +6,80 @@ A collection of Python scripts for predicting wind-generated wave characteristic
 
 This repository provides a practical implementation of the foundational SMB wave prediction model, a cornerstone of coastal and ocean engineering for decades. It is designed for engineers, scientists, and students who need to make preliminary estimates of wave conditions for design, planning, or research purposes.
 
-The core model operates in two distinct modes, selectable by the user:
+The core model operates in three distinct modes, selectable by the user:
 
-1. **Deep Water Mode:** For open-ocean or large lake scenarios where the water depth is sufficient to not influence wave generation.
+1.  **Deep Water Mode (Fetch-Limited):** For open-ocean or large lake scenarios where the water depth is sufficient to not influence wave generation, and wave growth is limited by the available fetch.
 
-2. **Depth-Limited Mode:** For coastal, nearshore, or shallow-water environments where the seabed interacts with and limits wave growth.
+2.  **Depth-Limited Mode (Fetch-Limited):** For coastal, nearshore, or shallow-water environments where the seabed interacts with and limits wave growth, and wave growth is limited by the available fetch.
+
+3.  **Duration-Limited Mode (Finite Depth or Deep Water):** Calculates wave parameters when the wind event is too short for waves to become fully developed over the available fetch, potentially considering water depth.
 
 ## Methodology
 
-The scripts are based on the semi-empirical Sverdrup-Munk-Bretschneider (SMB) method, which relates dimensionless wave parameters to wind conditions.
+The scripts are based on the semi-empirical Sverdrup-Munk-Bretschneider (SMB) method, which relates dimensionless wave parameters to wind conditions. The core principle is that wave growth is limited by either fetch (spatial constraint) or duration (temporal constraint).
 
-### Deep Water Formulas
+### Deep Water Formulas (Fetch-Limited)
 
 For deep water, the script uses the revised Bretschneider (1970) equations:
 
 * **Dimensionless Fetch:**
 
-  $$\hat{F} = \frac{gF}{U^{2}}$$
+    $$\hat{F} = \frac{gF}{U^{2}}$$
 
-* **Significant Wave Height (**$H\_s$**):**
+* **Significant Wave Height ($H_s$):**
 
-  $$\frac{gH_{s}}{U^{2}} = 0.283 \tanh\left[0.0125\left(\hat{F}\right)^{0.42}\right]$$
+    $$\frac{gH_{s}}{U^{2}} = 0.283 \tanh\left[0.0125\left(\hat{F}\right)^{0.42}\right]$$
 
-* **Significant Wave Period (**$T\_s$**):**
+* **Significant Wave Period ($T_s$):**
 
-  $$\frac{gT_{s}}{U} = 7.54 \tanh\left[0.077\left(\hat{F}\right)^{0.25}\right]$$
+    $$\frac{gT_{s}}{U} = 7.54 \tanh\left[0.077\left(\hat{F}\right)^{0.25}\right]$$
 
-* **Minimum Duration (**$t\_{min}$**):**
+* **Minimum Duration ($t_{min}$):**
 
-  $$t_{min} = \frac{U}{g} \cdot 6.5882 \cdot \exp\left(\sqrt{0.0161 \cdot (\ln \hat{F})^2 - 0.3692 \cdot \ln \hat{F} + 2.2024} + 0.8798 \cdot \ln \hat{F}\right)$$
+    $$t_{min} = \frac{U}{g} \cdot 6.5882 \cdot \exp\left(\sqrt{0.0161 \cdot (\ln \hat{F})^2 - 0.3692 \cdot \ln \hat{F} + 2.2024} + 0.8798 \cdot \ln \hat{F}\right)$$
 
-### Depth-Limited Formulas
+### Depth-Limited Formulas (Fetch-Limited)
 
-For shallower water, the script uses formulas from the Shore Protection Manual that incorporate a dimensionless depth parameter ($\\hat{d} = gd/U^2$):
+For shallower water, the script uses formulas from the Shore Protection Manual that incorporate a dimensionless depth parameter ($\hat{d} = gd/U^2$):
 
-* **Significant Wave Height (**$H\_s$**):**
+* **Significant Wave Height ($H_s$):**
 
-  $$H_s = \frac{U^2}{g} \cdot 0.283 \cdot \tanh(0.530 \hat{d}^{0.75}) \cdot \tanh\left[\frac{0.00565 \hat{F}^{0.5}}{\tanh(0.530 \hat{d}^{0.75})}\right]$$
+    $$H_s = \frac{U^2}{g} \cdot 0.283 \cdot \tanh(0.530 \hat{d}^{0.75}) \cdot \tanh\left[\frac{0.00565 \hat{F}^{0.5}}{\tanh(0.530 \hat{d}^{0.75})}\right]$$
 
-* **Significant Wave Period (**$T\_s$**):**
+* **Significant Wave Period ($T_s$):**
 
-  $$T_s = \frac{U}{g} \cdot 7.54 \cdot \tanh(0.833 \hat{d}^{0.375}) \cdot \tanh\left[\frac{0.0379 \hat{F}^{0.333}}{\tanh(0.833 \hat{d}^{0.375})}\right]$$
+    $$T_s = \frac{U}{g} \cdot 7.54 \cdot \tanh(0.833 \hat{d}^{0.375}) \cdot \tanh\left[\frac{0.0379 \hat{F}^{0.333}}{\tanh(0.833 \hat{d}^{0.375})}\right]$$
 
-* **Minimum Duration (**$t\_{min}$**):**
+* **Minimum Duration ($t_{min}$):**
 
-  $$t_{min} = \frac{U}{g} \cdot 6.5882 \cdot \exp\left(\sqrt{0.0161 \cdot (\ln \hat{F})^2 - 0.3692 \cdot \ln \hat{F} + 2.2024} + 0.8798 \cdot \ln \hat{F}\right)$$
- 
+    $$t_{min} = \frac{U}{g} \cdot 6.5882 \cdot \exp\left(\sqrt{0.0161 \cdot (\ln \hat{F})^2 - 0.3692 \cdot \ln \hat{F} + 2.2024} + 0.8798 \cdot \ln \hat{F}\right)$$
+
+### Duration-Limited Formulas (Finite Depth or Deep Water)
+
+When the wind event duration ($t$) is the limiting factor, the following formulas are used.
+Dimensionless duration: $\hat{t} = \frac{gt}{U}$.
+
+* **Significant Wave Height ($H_s$) - Deep Water:**
+
+    $$\frac{gH_{s}}{U^{2}} = 0.283 \tanh\left[0.000528 \left(\hat{t}\right)^{0.75}\right]$$
+
+* **Significant Wave Period ($T_s$) - Deep Water:**
+
+    $$\frac{gT_{s}}{U} = 7.54 \tanh\left[0.00379 \left(\hat{t}\right)^{0.41}\right]$$
+
+* **Significant Wave Height ($H_s$) - Finite Depth (Heuristic):**
+
+    $$H_s = \frac{U^2}{g} \cdot 0.283 \cdot \tanh(0.530 \hat{d}^{0.75}) \cdot \tanh\left[\frac{0.000528 \hat{t}^{0.75}}{\tanh(0.530 \hat{d}^{0.75})}\right]$$
+
+* **Significant Wave Period ($T_s$) - Finite Depth (Heuristic):**
+
+    $$T_s = \frac{U}{g} \cdot 7.54 \cdot \tanh(0.833 \hat{d}^{0.375}) \cdot \tanh\left[\frac{0.00379 \hat{t}^{0.41}}{\tanh(0.833 \hat{d}^{0.375})}\right]$$
+
 ## Features
 
-* **Dual-Mode Calculation:** Accurately applies formulas for both deep and depth-limited water conditions.
+* **Triple-Mode Calculation:** Accurately applies formulas for deep water (fetch-limited), depth-limited (fetch-limited), and duration-limited (finite depth or deep water) conditions.
 
-* **Comprehensive Outputs:** Calculates Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum Storm Duration (t_min).
+* **Comprehensive Outputs:** Calculates Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum Storm Duration (t_min) where applicable.
 
 * **Interactive Interface:** A simple command-line interface guides the user through the input process.
 
@@ -78,19 +101,21 @@ This is the main interactive script for performing individual SMB wave calculati
 
 * **Functionality:**
 
-  * Prompts the user for wind speed and fetch length.
+    * Prompts the user for wind speed and fetch length.
 
-  * Allows the user to choose between "Deep Water" and "Depth-Limited" calculation modes.
+    * Allows the user to choose between "Deep Water (Fetch-Limited)", "Depth-Limited (Fetch-Limited)", and "Duration-Limited (Finite Depth or Deep Water)" calculation modes.
 
-  * If "Depth-Limited" is selected, it prompts for water depth.
+    * If "Depth-Limited" is selected, it prompts for water depth.
 
-  * Calculates and displays Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum Storm Duration (t_min) based on the chosen mode and inputs.
+    * If "Duration-Limited" is selected, it prompts for storm duration and optionally water depth.
+
+    * Calculates and displays Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum Storm Duration (t_min) (or the input duration for duration-limited mode) based on the chosen mode and inputs.
 
 * **Usage:** Run directly from the command line and follow the prompts.
 
-  ```
-  python calculator.py
-  ```
+    ```
+    python calculator.py
+    ```
 
 ### `chart.py`
 
@@ -98,19 +123,19 @@ Generates a combined contour chart for SMB wave parameters in **deep water** con
 
 * **Functionality:**
 
-  * Uses `matplotlib` to create a single plot showing contours of Hs, Ts, and t_min.
+    * Uses `matplotlib` to create a single plot showing contours of Hs, Ts, and t_min.
 
-  * Displays wave parameters as functions of wind speed and fetch length for deep water.
+    * Displays wave parameters as functions of wind speed and fetch length for deep water.
 
-  * Utilizes different black line styles (solid for Hs, dashed for Ts, dotted for t_min) for clarity.
+    * Utilizes different black line styles (solid for Hs, dashed for Ts, dotted for t_min) for clarity.
 
-  * The chart is generated in A3 landscape format for better readability.
+    * The chart is generated in A3 landscape format for better readability.
 
 * **Usage:** Run directly to generate and display the chart.
 
-  ```
-  python chart.py
-  ```
+    ```
+    python chart.py
+    ```
 
 ### `chart_10m.py`
 
@@ -118,19 +143,19 @@ Generates a combined contour chart for SMB wave parameters in **depth-limited wa
 
 * **Functionality:**
 
-  * Similar to `chart.py`, but tailored for depth-limited scenarios.
+    * Similar to `chart.py`, but tailored for depth-limited scenarios.
 
-  * Calculates and plots contours of Hs, Ts, and t_min for a constant water depth (defaulting to 10m).
+    * Calculates and plots contours of Hs, Ts, and t_min for a constant water depth (defaulting to 10m).
 
-  * Provides a visual representation of how wave parameters change with wind speed and fetch in shallow water.
+    * Provides a visual representation of how wave parameters change with wind speed and fetch in shallow water.
 
-  * The chart is generated in A3 landscape format.
+    * The chart is generated in A3 landscape format.
 
 * **Usage:** Run directly to generate and display the chart. The `FIXED_DEPTH` variable can be modified within the script.
 
-  ```
-  python chart_10m.py
-  ```
+    ```
+    python chart_10m.py
+    ```
 
 ### `smb-nomogram-deep.py`
 
@@ -138,17 +163,17 @@ Generates a multi-page PDF containing three nomograms for **deep water** wave pr
 
 * **Functionality:**
 
-  * Creates separate nomograms for Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum required wind duration (t_min).
+    * Creates separate nomograms for Significant Wave Height (Hs), Significant Wave Period (Ts), and Minimum required wind duration (t_min).
 
-  * Outputs a single PDF file named `smb-nomogram-deep.pdf`.
+    * Outputs a single PDF file named `smb-nomogram-deep.pdf`.
 
-  * Requires `pynomo` and `nomogen` libraries for nomogram generation.
+    * Requires `pynomo` and `nomogen` libraries for nomogram generation.
 
 * **Usage:** Run directly to generate the PDF.
 
-  ```
-  python smb-nomogram-deep.py
-  ```
+    ```
+    python smb-nomogram-deep.py
+    ```
 
 ### `smb-nomogram-shallow.py`
 
@@ -156,19 +181,19 @@ Generates a multi-page PDF containing three nomograms for **depth-limited (shall
 
 * **Functionality:**
 
-  * Similar to `smb-nomogram-deep.py`, but specifically for shallow water conditions.
+    * Similar to `smb-nomogram-deep.py`, but specifically for shallow water conditions.
 
-  * Generates nomograms for Hs, Ts, and t_min at a constant water depth (defaulting to 10m).
+    * Generates nomograms for Hs, Ts, and t_min at a constant water depth (defaulting to 10m).
 
-  * Outputs a single PDF file named `smb-nomogram-shallow.pdf`.
+    * Outputs a single PDF file named `smb-nomogram-shallow.pdf`.
 
-  * Requires `pynomo` and `nomogen` libraries.
+    * Requires `pynomo` and `nomogen` libraries.
 
 * **Usage:** Run directly to generate the PDF. The `WATER_DEPTH` variable can be modified within the script.
 
-  ```
-  python smb-nomogram-shallow.py
-  ```
+    ```
+    python smb-nomogram-shallow.py
+    ```
 
 ### `tables.py`
 
@@ -176,55 +201,56 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
 * **Functionality:**
 
-  * Calculates Hs, Ts, and t_min for predefined ranges of wind speeds (5-35 m/s), fetches (0-50 km), and depths (Deep Water, 100m, 50m, 25m, 10m, 5m, 1m).
+    * Calculates Hs, Ts, and t_min for predefined ranges of wind speeds (5-35 m/s), fetches (0-50 km), and depths (Deep Water, 100m, 50m, 25m, 10m, 5m, 1m).
 
-  * Organizes the results into a well-formatted table within a PDF document.
+    * Organizes the results into a well-formatted table within a PDF document.
 
-  * Uses `reportlab` for PDF generation, ensuring a professional and readable output.
+    * Uses `reportlab` for PDF generation, ensuring a professional and readable output.
 
 * **Usage:** Run directly to generate the PDF file `comprehensive_wave_calculations.pdf`.
 
-  ```
-  python tables.py
-  ```
+    ```
+    python tables.py
+    ```
 
 ## How to Use
 
-1. **Prerequisites:** Ensure you have Python 3 installed. You will also need to install the following libraries:
+1.  **Prerequisites:** Ensure you have Python 3 installed. You will also need to install the following libraries:
 
-   * `numpy`
+    * `numpy`
 
-   * `scipy` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py`, specifically for `scipy.arange` compatibility fix)
+    * `scipy` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py`, specifically for `scipy.arange` compatibility fix)
 
-   * `matplotlib` (for `chart.py` and `chart_10m.py`)
+    * `matplotlib` (for `chart.py` and `chart_10m.py`)
 
-   * `reportlab` (for `tables.py`)
+    * `reportlab` (for `tables.py`)
 
-   * `pynomo` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py`)
+    * `pynomo` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py`)
 
-   * `PyPDF2` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py` to merge PDFs)
+    * `PyPDF2` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py` to merge PDFs)
 
-   * `PyX` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py` for LaTeX rendering)
+    * `PyX` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py` for LaTeX rendering)
 
-   You can install most of them using pip:
+    You can install most of them using pip:
 
-   ```
-   pip install numpy matplotlib reportlab PyPDF2 PyX
-   ```pynomo` might require manual installation or specific setup; refer to its documentation if `pip install pynomo` fails. `nomogen.py` is expected to be in a discoverable path (e.g., parent directory or same directory).
+    ```
+    pip install numpy matplotlib reportlab PyPDF2 PyX pynomo
+	```
+    `nomogen.py` is expected to be in same directory as script).
 
-2. **Running Scripts:**
+2.  **Running Scripts:**
 
-   * For interactive calculations, run `python calculator.py`.
+    * For interactive calculations, run `python calculator.py`.
 
-   * For deep water charts, run `python chart.py`.
+    * For deep water charts, run `python chart.py`.
 
-   * For 10m depth-limited charts, run `python chart_10m.py`.
+    * For 10m depth-limited charts, run `python chart_10m.py`.
 
-   * For deep water nomograms, run `python smb-nomogram-deep.py`.
+    * For deep water nomograms, run `python smb-nomogram-deep.py`.
 
-   * For shallow water nomograms, run `python smb-nomogram-shallow.py`.
+    * For shallow water nomograms, run `python smb-nomogram-shallow.py`.
 
-   * For the comprehensive table, run `python tables.py`.
+    * For the comprehensive table, run `python tables.py`.
 
 ## Assumptions and Limitations
 
@@ -232,11 +258,11 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
 * **Input Data Quality:** The accuracy of the results is highly dependent on the quality of the inputs. For best results:
 
-  * **Wind Speed:** Should be the standard 10-meter overwater wind speed, adjusted for atmospheric stability if possible.
+    * **Wind Speed:** Should be the standard 10-meter overwater wind speed, adjusted for atmospheric stability if possible.
 
-  * **Fetch Length:** Should be the "effective fetch," which accounts for the geometry of the water body, not just a straight-line distance.
+    * **Fetch Length:** Should be the "effective fetch," which accounts for the geometry of the water body, not just a straight-line distance.
 
-* **Fetch-Limited Focus:** The scripts primarily calculate wave parameters assuming the condition is fetch-limited and provide the minimum duration for this to be valid. They do not explicitly handle duration-limited scenarios by calculating an equivalent fetch.
+* **Heuristic for Duration-Limited (Finite Depth):** The formulas used for duration-limited conditions in finite depth (Option 3 in `calculator.py`) are an adaptation based on the structure of SMB equations for fetch-limited finite depth. Direct empirical formulas for this specific combined scenario are less common in basic SMB literature. While providing a reasonable estimate, these should be used with awareness of their heuristic nature.
 
 ## Bibliography
 

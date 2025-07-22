@@ -32,7 +32,7 @@ scipy.arange = np.arange
 
 # --- Optional parameter to control isopleth plotting ---
 # Set this to True to plot the isopleths (example lines) or False to hide them.
-PLOT_ISOPLETHS = True
+PLOT_ISOPLETHS = False
 # -------------------------------------------------------------
 
 # --- Configuration for Shallow Water ---
