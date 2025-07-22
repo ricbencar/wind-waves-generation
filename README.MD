@@ -113,10 +113,6 @@ This is the main interactive script for performing individual SMB wave calculati
 
   ```
   python calculator.py
-  
-  
-  
-  
   ```
 
 ### `chart.py`
@@ -137,10 +133,6 @@ Generates a combined contour chart for SMB wave parameters in **deep water** con
 
   ```
   python chart.py
-  
-  
-  
-  
   ```
 
 ### `chart_10m.py`
@@ -161,10 +153,6 @@ Generates a combined contour chart for SMB wave parameters in **depth-limited wa
 
   ```
   python chart_10m.py
-  
-  
-  
-  
   ```
 
 ### `smb-nomogram-deep.py`
@@ -183,10 +171,6 @@ Generates a multi-page PDF containing three nomograms for **deep water** wave pr
 
   ```
   python smb-nomogram-deep.py
-  
-  
-  
-  
   ```
 
 ### `smb-nomogram-shallow.py`
@@ -207,10 +191,6 @@ Generates a multi-page PDF containing three nomograms for **depth-limited (shall
 
   ```
   python smb-nomogram-shallow.py
-  
-  
-  
-  
   ```
 
 ### `tables.py`
@@ -229,10 +209,6 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
   ```
   python tables.py
-  
-  
-  
-  
   ```
 
 ## How to Use
@@ -258,8 +234,6 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
    ```
    pip install numpy matplotlib reportlab PyPDF2 PyX pynomo
    ```nomogen.py` is expected to be in same directory as script).
-   
-   
 
 2. **Running Scripts:**
 
