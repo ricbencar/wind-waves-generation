@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import sys # Import sys module to redirect stdout
 
 # =============================================================================
 # SMB Wave Prediction Model
@@ -12,21 +13,18 @@ import numpy as np
 # and the minimum wind duration (t_min) required to generate a fully-developed
 # sea state for a given fetch.
 #
-# The script provides three distinct calculation modes based on water depth
+# The script provides two distinct calculation modes based on water depth
 # and limiting condition:
-#   1. Deep Water (Fetch-Limited): Assumes the water depth is large enough that
-#      the seabed does not interact with or influence wave generation. This is
-#      typically applicable for open-ocean and large, deep lake scenarios.
-#      Calculates Hs, Ts, and minimum duration for a given fetch.
-#   2. Depth-Limited (Fetch-Limited): Applies to transitional or shallow water
-#      where the water depth is a significant factor, limiting wave growth in
-#      conjunction with wind speed and fetch. This is common in coastal areas,
-#      estuaries, and shallower lakes. Calculates Hs, Ts, and minimum duration
-#      for a given fetch and depth.
-#   3. Duration-Limited (Finite Depth): Calculates wave parameters (Hs, Ts)
+#   1. Fetch-Limited (Finite Depth or Deep Water): Assumes wave growth is
+#      primarily limited by the available fetch. It can handle both deep water
+#      conditions (where the seabed does not influence wave generation) and
+#      finite depth conditions (where water depth is a significant factor).
+#      Calculates Hs, Ts, and minimum duration for a given fetch and optional depth.
+#   2. Duration-Limited (Finite Depth or Deep Water): Calculates wave parameters (Hs, Ts)
 #      when the wind event is too short for waves to become fully developed
 #      over the available fetch, and water depth also plays a role. Inputs are
-#      wind speed, storm duration, and water depth.
+#      wind speed, storm duration, and water depth. For this mode, it also
+#      calculates the equivalent fetch that would produce the same wave conditions.
 #
 # METHODOLOGY:
 # The SMB method is a foundational tool in coastal engineering for making
@@ -54,7 +52,7 @@ import numpy as np
 #     overwater value, and the fetch should be an "effective fetch" that
 #     accounts for the geometry of the water body.
 #   - Heuristic for Duration-Limited (Finite Depth): The formulas used for
-#     duration-limited conditions in finite depth (Option 3) are an adaptation
+#     duration-limited conditions in finite depth (Option 2) are an adaptation
 #     based on the structure of SMB equations for fetch-limited finite depth.
 #     Direct empirical formulas for this specific combined scenario are less
 #     common in basic SMB literature. While providing a reasonable estimate,
@@ -197,6 +195,8 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
     This function uses SMB-based formulas directly for duration-limited wave
     growth. If a depth is provided, it attempts to incorporate depth effects
     heuristically based on the structure of fetch-limited depth-limited formulas.
+    It also calculates an "equivalent fetch" that would produce the same wave
+    conditions if the system were fetch-limited.
 
     Args:
         wind_speed (float): Wind speed at 10m height (m/s).
@@ -208,6 +208,8 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         tuple: A tuple containing:
             - Hs (float): Predicted significant wave height (m).
             - Ts (float): Predicted significant wave period (s).
+            - equivalent_fetch_km (float): The equivalent fetch length (km) that would
+                                           produce the same wave conditions if fetch-limited.
     """
     # Convert duration from hours to seconds
     duration_seconds = duration_hours * 3600
@@ -231,6 +233,16 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         # Formula: (g * Ts) / U = 7.54 * tanh[0.00379 * (g * t / U)^0.41]
         gTs_U = 7.54 * math.tanh(0.00379 * (dim_duration**0.41))
         Ts = gTs_U * (wind_speed / gravity)
+
+        # --- Equivalent Fetch Calculation (Deep Water) ---
+        # Equating the arguments of the tanh function for dimensionless Hs in duration-limited
+        # and fetch-limited deep water conditions:
+        # 0.000528 * (g * t / U)^0.75 = 0.0125 * (g * F / U^2)^0.42
+        # Solving for (g * F / U^2) which is dim_fetch:
+        dim_fetch_equivalent = ( (0.000528 / 0.0125) * (dim_duration**0.75) )**(1/0.42)
+        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed**2 / gravity)
+        equivalent_fetch_km = equivalent_fetch_m / 1000 # Convert to kilometers
+
     else:
         # --- Dimensionless Depth Calculation ---
         dim_depth = (gravity * depth) / wind_speed**2
@@ -252,85 +264,79 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375) # From fetch-limited depth-limited Ts
         Ts = (wind_speed / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t_duration / tanh_depth_t)
 
-    return Hs, Ts
+        # --- Equivalent Fetch Calculation (Finite Depth) ---
+        # Equating the arguments of the inner tanh function for dimensionless Hs in duration-limited
+        # and fetch-limited finite depth conditions:
+        # 0.000528 * (g * t / U)^0.75 / tanh_depth_h = 0.00565 * (g * F / U^2)^0.5 / tanh_depth_h
+        # This simplifies to:
+        # 0.000528 * (g * t / U)^0.75 = 0.00565 * (g * F / U^2)^0.5
+        # Solving for (g * F / U^2) which is dim_fetch:
+        dim_fetch_equivalent = ( (0.000528 / 0.00565) * (dim_duration**0.75) )**2
+        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed**2 / gravity)
+        equivalent_fetch_km = equivalent_fetch_m / 1000 # Convert to kilometers
+
+    return Hs, Ts, equivalent_fetch_km
 
 def main():
     """
     Main function to drive the user interaction, calculations, and display results.
     """
-    while True: # Loop for consecutive calculations
-        print()
-        print("======================================================")
-        print("  Sverdrup-Munk-Bretschneider (SMB) Wave Calculator")
-        print("======================================================")
+    # Open the report file in write mode
+    with open("report.txt", "w") as report_file:
+        # Store original stdout
+        original_stdout = sys.stdout
+        # Redirect stdout to both the file and the console
+        sys.stdout = Tee(sys.stdout, report_file)
 
-        # --- Get User Inputs for Wind Speed ---
-        while True:
-            try:
-                print()
-                wind_speed = float(input("Enter wind speed at 10m height (m/s): "))
-                break # Exit loop if input is a valid number.
-            except ValueError:
-                print("Invalid input. Please enter a numeric value for wind speed.")
-
-        # --- Select Calculation Mode ---
-        while True:
-            print("\nSelect the calculation mode:")
+        while True: # Loop for consecutive calculations
             print()
-            print("  1: Fetch-Limited (Deep Water)")
-            print("  2: Fetch-Limited (Depth-Limited)")
-            print("  3: Duration-Limited (Finite Depth or Deep Water)")
-            print()
-            choice = input("Enter your choice (1, 2, or 3): ")
-            if choice in ['1', '2', '3']:
-                break
-            else:
-                print("Invalid choice. Please enter 1, 2, or 3.")
+            print("======================================================")
+            print("  Sverdrup-Munk-Bretschneider (SMB) Wave Calculator")
+            print("======================================================")
 
-        # Initialize variables for results
-        height = np.nan
-        period = np.nan
-        duration_display_value = np.nan # This will hold the value to display for duration
-        duration_type_message = "" # This will hold the message describing the duration type
+            # --- Get User Inputs for Wind Speed ---
+            while True:
+                try:
+                    print()
+                    wind_speed = float(input("Enter wind speed at 10m height (m/s): "))
+                    if wind_speed <= 0:
+                        print("Wind speed must be a positive value.")
+                    else:
+                        break # Exit loop if input is a valid positive number.
+                except ValueError:
+                    print("Invalid input. Please enter a numeric value for wind speed.")
 
-        # --- Perform Calculations based on User's Choice ---
-        if choice == '1':
-            # If the user chose 'Fetch-Limited (Deep Water)', get fetch input.
+            # --- Get User Inputs for Fetch and Duration ---
+            # We will collect both fetch and duration to allow for comprehensive comparison.
+            
+            # Get Fetch Input
             while True:
                 try:
                     fetch_km = float(input("Enter fetch length (km): "))
-                    fetch_m = fetch_km * 1000  # Convert fetch from km to meters
-                    break
+                    if fetch_km <= 0:
+                        print("Fetch length must be a positive value.")
+                    else:
+                        fetch_m = fetch_km * 1000  # Convert fetch from km to meters
+                        break
                 except ValueError:
                     print("Invalid input. Please enter a numeric value for fetch.")
-            height, period, duration_display_value = calculate_deep_water(wind_speed, fetch_m)
-            duration_type_message = "Minimum Storm Duration Required"
-        elif choice == '2':
-            # If the user chose 'Fetch-Limited (Depth-Limited)', get fetch and depth inputs.
-            while True:
-                try:
-                    fetch_km = float(input("Enter fetch length (km): "))
-                    fetch_m = fetch_km * 1000  # Convert fetch from km to meters
-                    break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for fetch.")
-            while True:
-                try:
-                    depth = float(input("Enter water depth (m): "))
-                    break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for depth.")
-            height, period, duration_display_value = calculate_depth_limited(wind_speed, fetch_m, depth)
-            duration_type_message = "Minimum Storm Duration Required"
-        elif choice == '3':
-            # If the user chose 'Duration-Limited', get duration and optionally depth input.
-            while True:
-                try:
-                    duration_input_hours = float(input("Enter storm duration (hours): "))
-                    break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for duration.")
 
+            # Get Duration Input
+            while True:
+                try:
+                    duration_str = input("Enter storm duration (hours), or leave blank for effectively infinite duration: ").strip()
+                    if duration_str == "":
+                        duration_input_hours = float('inf') # Set to infinity if blank
+                        break
+                    duration_input_hours = float(duration_str)
+                    if duration_input_hours <= 0:
+                        print("Storm duration must be a positive value or left blank.")
+                    else:
+                        break
+                except ValueError:
+                    print("Invalid input. Please enter a numeric value for duration or leave blank.")
+
+            # Get Depth Input (optional)
             while True:
                 depth_str = input("Enter water depth (m) for finite depth, or leave blank for deep water: ").strip()
                 if depth_str == "":
@@ -345,28 +351,83 @@ def main():
                 except ValueError:
                     print("Invalid input. Please enter a numeric value for depth or leave blank.")
 
-            height, period = calculate_duration_limited(wind_speed, duration_input_hours, depth_input)
-            duration_display_value = duration_input_hours
-            duration_type_message = "Duration limited"
+            # --- Calculate for Fetch-Limited Scenario (based on input fetch) ---
+            if depth_input is None:
+                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_deep_water(wind_speed, fetch_m)
+            else:
+                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_depth_limited(wind_speed, fetch_m, depth_input)
+            
+            # --- Calculate for Duration-Limited Scenario (based on input duration) ---
+            hs_duration_potential, ts_duration_potential, equivalent_fetch_duration_potential = calculate_duration_limited(wind_speed, duration_input_hours, depth_input)
 
+            # --- Determine the Controlling Condition and Final Results ---
+            # The actual wave height is the minimum of what fetch and duration allow.
+            
+            # First, determine the actual controlling Hs and Ts by taking the minimum of the two potentials
+            # This ensures Hs never decreases with increased duration or fetch.
+            if hs_fetch_potential <= hs_duration_potential:
+                controlling_hs = hs_fetch_potential
+                controlling_period = ts_fetch_potential
+            else:
+                controlling_hs = hs_duration_potential
+                controlling_period = ts_duration_potential
 
-        # --- Display Final Results ---
-        # The calculated results are printed to the console, formatted for clarity.
-        print("\n------------------ RESULTS ------------------")
-        print(f"Predicted Significant Wave Height (Hs): {height:.2f} meters")
-        print(f"Predicted Significant Wave Period (Ts): {period:.2f} seconds")
-        if not math.isnan(duration_display_value):
-            print(f"{duration_type_message}:      {duration_display_value:.2f} hours")
-        else:
-            print("Minimum Storm Duration:             Not applicable for this calculation mode.")
-        print("-------------------------------------------")
+            # Now, determine the controlling factor message and relevant values based on the physical constraints
+            # This logic determines *why* the wave is limited (fetch or duration)
+            if duration_input_hours < t_min_fetch_potential:
+                # If the actual storm duration is less than the minimum required for the given fetch,
+                # then duration is the primary physical limiting factor.
+                controlling_factor_message = "Duration-Limited"
+                relevant_duration_value = duration_input_hours
+                relevant_duration_message = "Given Storm Duration"
+                relevant_fetch_value = equivalent_fetch_duration_potential
+                relevant_fetch_message = "Equivalent Fetch for Given Duration"
+            else:
+                # If the actual storm duration is greater than or equal to the minimum required,
+                # then fetch is the primary physical limiting factor (or duration is sufficient).
+                controlling_factor_message = "Fetch-Limited"
+                relevant_duration_value = t_min_fetch_potential
+                relevant_duration_message = "Minimum Duration for Given Fetch"
+                relevant_fetch_value = fetch_km
+                relevant_fetch_message = "Given Fetch"
 
-        # --- Ask user if they want to perform another calculation ---
-        print()
-        another_calculation = input("Do you want to perform another calculation? (yes/no): ").lower()
-        if another_calculation not in ['yes', 'y']:
-            print("Exiting SMB Wave Calculator. Goodbye!")
-            break # Exit the main loop
+            # --- Display Final Results ---
+            print("\n------------------ RESULTS ------------------")
+            print(f"Controlling Wave Growth Factor:     {controlling_factor_message}")
+            print(f"Predicted Significant Wave Height (Hs): {controlling_hs:.2f} meters")
+            print(f"Predicted Significant Wave Period (Ts): {controlling_period:.2f} seconds")
+            
+            if not math.isinf(relevant_duration_value) and not math.isnan(relevant_duration_value):
+                print(f"{relevant_duration_message}:      {relevant_duration_value:.2f} hours")
+            elif math.isinf(relevant_duration_value):
+                print(f"{relevant_duration_message}:      Infinite hours (assumed)")
+            
+            if not math.isnan(relevant_fetch_value):
+                print(f"{relevant_fetch_message}:                   {relevant_fetch_value:.2f} kilometers")
+            
+            print("-------------------------------------------")
+
+            # --- Ask user if they want to perform another calculation ---
+            print()
+            another_calculation = input("Do you want to perform another calculation? (yes/no): ").lower()
+            if another_calculation not in ['yes', 'y']:
+                print("Exiting SMB Wave Calculator. Goodbye!")
+                break # Exit the main loop
+        
+        # Restore original stdout
+        sys.stdout = original_stdout
+
+# Helper class to redirect print output to multiple destinations
+class Tee(object):
+    def __init__(self, *files):
+        self.files = files
+    def write(self, obj):
+        for f in self.files:
+            f.write(obj)
+            f.flush() # Ensure immediate writing
+    def flush(self):
+        for f in self.files:
+            f.flush()
 
 # This standard Python construct ensures that the `main()` function is called
 # only when this script is executed directly. It prevents the code from running
