@@ -231,9 +231,10 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
    You can install most of them using pip:
 
-   ```
-   pip install numpy matplotlib reportlab PyPDF2 PyX pynomo```
-   (nomogen.py` is expected to be in same directory as the script).
+  ```
+  pip install numpy matplotlib reportlab PyPDF2 PyX pynomo
+  ```
+  (nomogen.py` is expected to be in same directory as the script).
 
 2. **Running Scripts:**
 
