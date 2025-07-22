@@ -12,7 +12,7 @@ The core model operates in two distinct modes, based on the primary limiting con
 
 2. **Duration-Limited (Finite Depth or Deep Water):** Calculates wave parameters when the wind event is too short for waves to become fully developed over the available fetch. This mode considers wind speed, storm duration, and water depth, and also calculates the equivalent fetch that would produce the same wave conditions.
 
-The `calculator.py` script now comprehensively evaluates both fetch and duration limits for given inputs to determine the actual controlling wave growth factor and provides consistent results.
+The `calculator.py` script comprehensively evaluates both fetch and duration limits for given inputs to determine the actual controlling wave growth factor.
 
 ## Methodology
 
