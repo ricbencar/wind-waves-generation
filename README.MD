@@ -229,12 +229,11 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
    * `PyX` (for `smb-nomogram-deep.py` and `smb-nomogram-shallow.py` for LaTeX rendering)
 
-   You can install most of them using pip:
+   You can install most of them using pip (`nomogen.py` is expected to be in same directory as script):
 
   ```
   pip install numpy matplotlib reportlab PyPDF2 PyX pynomo
   ```
-  (nomogen.py` is expected to be in same directory as the script).
 
 2. **Running Scripts:**
 
