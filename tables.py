@@ -7,15 +7,31 @@ from reportlab.lib.styles import getSampleStyleSheet
 # =============================================================================
 # SMB Wave Prediction Model Functions
 # =============================================================================
-# These functions are extracted from the provided calculator.py to ensure
-# consistency in wave parameter calculations for both deep and depth-limited conditions.
 
-def calculate_deep_water(wind_speed, fetch, gravity=9.81):
+def calculate_adjusted_wind_speed(U10):
+    """
+    Calculates the adjusted wind speed (Ua) from the 10-meter wind speed (U10).
+
+    This adjustment accounts for the non-linear relationship between measured
+    wind speed and the actual wind stress at the water surface, as specified
+    in the Shore Protection Manual (SPM 1984).
+
+    Args:
+        U10 (float): The wind speed at 10m height over water (m/s).
+
+    Returns:
+        float: The adjusted wind speed (Ua) in m/s.
+    """
+    # Formula from SPM (1984): Ua = 0.71 * U10^1.23
+    Ua = 0.71 * (U10**1.23)
+    return Ua
+
+def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
     """
     Calculates fetch-limited wave properties in deep water using the SMB method.
 
     Args:
-        wind_speed (float): The wind speed at 10m height over water (m/s).
+        wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
         fetch (float):      The effective fetch length (m).
         gravity (float):    The acceleration due to gravity (m/s^2).
 
@@ -31,27 +47,27 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
         return 0.0, 0.0, 0.0
 
     # Dimensionless Fetch Calculation: F_hat = g * F / U^2
-    dim_fetch = (gravity * fetch) / (wind_speed**2)
+    dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
     # Significant Wave Height (Hs) Calculation: (g * Hs) / U^2 = 0.283 * tanh[0.0125 * (g * F / U^2)^0.42]
     gHs_U2 = 0.283 * math.tanh(0.0125 * (dim_fetch**0.42))
-    Hs = gHs_U2 * (wind_speed**2 / gravity)
+    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
     # Significant Wave Period (Ts) Calculation: (g * Ts) / U = 7.54 * tanh[0.077 * (g * F / U^2)^0.25]
     gTs_U = 7.54 * math.tanh(0.077 * (dim_fetch**0.25))
-    Ts = gTs_U * (wind_speed / gravity)
+    Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # Minimum Wind Duration (t_min) Calculation: Empirical formula
     log_dim_fetch = math.log(dim_fetch) # This line caused the error when dim_fetch was 0
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed / gravity
+    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours
 
     return Hs, Ts, t_min_hours
 
-def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
+def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
     """
     Calculates wave properties for depth-limited conditions.
 
@@ -59,7 +75,7 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     depths, where wave growth is influenced by the seabed.
 
     Args:
-        wind_speed (float): Wind speed at 10m height (m/s).
+        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
         fetch (float):      Effective fetch length (m).
         depth (float):      Water depth (m).
         gravity (float):    Acceleration of gravity (m/s^2).
@@ -73,18 +89,18 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
         return 0.0, 0.0, 0.0
 
     # Dimensionless Parameters
-    dim_fetch = (gravity * fetch) / wind_speed**2
-    dim_depth = (gravity * depth) / wind_speed**2
+    dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
+    dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
     # Depth-Limited Significant Wave Height (Hs)
     term_h = 0.00565 * (dim_fetch)**0.5
     tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
 
     # Depth-Limited Significant Wave Period (Ts)
     term_t = 0.0379 * (dim_fetch)**0.333
     tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
 
     # Minimum Wind Duration (t_min) Calculation (same as deep water for consistency with original script)
     # This part was the source of the error if dim_fetch was 0
@@ -92,7 +108,7 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed / gravity
+    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours
 
     return Hs, Ts, t_min_hours
@@ -117,29 +133,30 @@ def create_comprehensive_wave_table_pdf(output_filename="comprehensive_wave_calc
     story.append(Spacer(1, 24)) # Add more space before the table
 
     # Define the table headers
-    headers = ["Wind (m/s)", "Fetch (km)", "Depth (m)", "Hs (m)", "Ts (s)", "Dur (h)"]
+    headers = ["U10 (m/s)", "Fetch (km)", "Depth (m)", "Hs (m)", "Ts (s)", "Dur (h)"] # Changed header to U10
 
     # Define the ranges for calculations
     fetches_km = list(range(0, 51, 5))  # 0 to 50 km, step 5 km
-    wind_speeds_mps = list(range(5, 36, 5)) # 5 to 35 m/s, step 5 m/s
+    U10_speeds_mps = list(range(5, 36, 5)) # 5 to 35 m/s, step 5 m/s
     depths_m = [999, 100, 50, 25, 10, 5, 1] # Specified depths
 
     data_rows = []
 
     # Iterate through all combinations to generate data
-    for wind_speed in wind_speeds_mps:
+    for U10_speed in U10_speeds_mps:
+        Ua_speed = calculate_adjusted_wind_speed(float(U10_speed)) # Calculate Ua
         for fetch_km in fetches_km:
             fetch_m = float(fetch_km * 1000)  # Convert fetch from km to meters, ensure float
             for depth in depths_m:
                 hs, ts, duration = 0.0, 0.0, 0.0 # Initialize with floats
 
                 if depth == 999: # Treat 999m as deep water for calculation
-                    hs, ts, duration = calculate_deep_water(wind_speed, fetch_m)
+                    hs, ts, duration = calculate_deep_water(Ua_speed, fetch_m)
                 else: # All other specified depths are depth-limited
-                    hs, ts, duration = calculate_depth_limited(wind_speed, fetch_m, float(depth)) # Ensure depth is float
+                    hs, ts, duration = calculate_depth_limited(Ua_speed, fetch_m, float(depth)) # Ensure depth is float
 
                 data_rows.append([
-                    f"{wind_speed:.1f}",
+                    f"{U10_speed:.1f}", # Use U10 for display
                     f"{fetch_km:.0f}",
                     f"{depth:.0f}",
                     f"{hs:.2f}",
