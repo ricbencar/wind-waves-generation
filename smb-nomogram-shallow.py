@@ -61,7 +61,25 @@ text.set(text.LatexEngine)
 # =============================================================================
 # SMB WAVE PREDICTION MODEL (DEPTH-LIMITED / SHALLOW WATER)
 # =============================================================================
-def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
+def calculate_adjusted_wind_speed(U10):
+    """
+    Calculates the adjusted wind speed (Ua) from the 10-meter wind speed (U10).
+
+    This adjustment accounts for the non-linear relationship between measured
+    wind speed and the actual wind stress at the water surface, as specified
+    in the Shore Protection Manual (SPM 1984).
+
+    Args:
+        U10 (float): The wind speed at 10m height over water (m/s).
+
+    Returns:
+        float: The adjusted wind speed (Ua) in m/s.
+    """
+    # Formula from SPM (1984): Ua = 0.71 * U10^1.23
+    Ua = 0.71 * (U10**1.23)
+    return Ua
+
+def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.81):
     """
     Calculates wave properties for depth-limited conditions.
 
@@ -71,7 +89,7 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
     using the direct formula from the Coastal Engineering Manual.
 
     Args:
-        wind_speed (float): Wind speed at 10m height (m/s).
+        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
         fetch (float):      Effective fetch length (m).
         depth (float):      Water depth (m).
         gravity (float):    Acceleration of gravity (m/s^2).
@@ -79,14 +97,14 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
     Returns:
         tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
     """
-    if wind_speed <= 0 or fetch <= 0 or depth <= 0:
+    if wind_speed_adjusted <= 0 or fetch <= 0 or depth <= 0:
         return 0, 0, 0
 
     # --- Dimensionless Parameters ---
     # For depth-limited cases, both dimensionless fetch and dimensionless
     # depth are required to characterize the conditions.
-    dim_fetch = (gravity * fetch) / wind_speed**2
-    dim_depth = (gravity * depth) / wind_speed**2
+    dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
+    dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
     # --- Depth-Limited Significant Wave Height (Hs) ---
     # This formula combines the effects of fetch and depth. The outer tanh
@@ -95,7 +113,7 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
     # Ref: U.S. Army (1984), Shore Protection Manual.
     term_h = 0.00565 * (dim_fetch)**0.5
     tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
 
     # --- Depth-Limited Significant Wave Period (Ts) ---
     # Similar to the height calculation, this formula combines dimensionless
@@ -103,7 +121,7 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
     # Ref: U.S. Army (1984), Shore Protection Manual.
     term_t = 0.0379 * (dim_fetch)**0.333
     tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
     # This complex empirical formula calculates the minimum time required for a
@@ -115,7 +133,7 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed / gravity
+    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
 
     return Hs, Ts, t_min_hours
@@ -123,22 +141,25 @@ def calculate_shallow_water(wind_speed, fetch, depth, gravity=9.81):
 # =============================================================================
 # WRAPPER FUNCTIONS FOR NOMOGEN
 # =============================================================================
-def get_Hs(wind_speed, fetch_km):
+def get_Hs(U10, fetch_km):
     """Returns only the Significant Wave Height for shallow water."""
+    Ua = calculate_adjusted_wind_speed(U10)
     fetch_m = fetch_km * 1000
-    Hs, _, _ = calculate_shallow_water(wind_speed, fetch_m, WATER_DEPTH)
+    Hs, _, _ = calculate_shallow_water(Ua, fetch_m, WATER_DEPTH)
     return Hs
 
-def get_Ts(wind_speed, fetch_km):
+def get_Ts(U10, fetch_km):
     """Returns only the Significant Wave Period for shallow water."""
+    Ua = calculate_adjusted_wind_speed(U10)
     fetch_m = fetch_km * 1000
-    _, Ts, _ = calculate_shallow_water(wind_speed, fetch_m, WATER_DEPTH)
+    _, Ts, _ = calculate_shallow_water(Ua, fetch_m, WATER_DEPTH)
     return Ts
 
-def get_Duration(wind_speed, fetch_km):
+def get_Duration(U10, fetch_km):
     """Returns only the Minimum Duration for shallow water."""
+    Ua = calculate_adjusted_wind_speed(U10)
     fetch_m = fetch_km * 1000
-    _, _, t_min = calculate_shallow_water(wind_speed, fetch_m, WATER_DEPTH)
+    _, _, t_min = calculate_shallow_water(Ua, fetch_m, WATER_DEPTH)
     return t_min
 
 # =============================================================================
@@ -153,10 +174,11 @@ def generate_nomograms():
     fetch_min, fetch_max = 1, 50.0
 
     # --- Lake Garda Isopleth Example (re-calculated for d=10m) ---
-    isopleth_wind = 25.0
+    isopleth_U10 = 25.0
     isopleth_fetch = 45.0
-    hs_iso, ts_iso, dur_iso = calculate_shallow_water(isopleth_wind, isopleth_fetch * 1000, WATER_DEPTH)
-    print(f"--- Lake Garda Example (U=25 m/s, F=45 km, d={WATER_DEPTH}m) ---")
+    isopleth_Ua = calculate_adjusted_wind_speed(isopleth_U10) # Calculate Ua for isopleth
+    hs_iso, ts_iso, dur_iso = calculate_shallow_water(isopleth_Ua, isopleth_fetch * 1000, WATER_DEPTH)
+    print(f"--- Lake Garda Example (U10={isopleth_U10} m/s, F={isopleth_fetch} km, d={WATER_DEPTH}m) ---")
     print(f"Calculated Hs: {hs_iso:.2f} m, Ts: {ts_iso:.2f} s, Duration: {dur_iso:.2f} hours")
     print("------------------------------------------------")
 
@@ -195,7 +217,7 @@ def generate_nomograms():
             out_max = max(out_max, dur_iso)
 
         wind_axis_params = {
-            'u_min': wind_min, 'u_max': wind_max, 'title': r'Wind Speed, U (m/s)',
+            'u_min': wind_min, 'u_max': wind_max, 'title': r'Wind Speed, $U_{10}$ (m/s)', # Changed label to U10
             'scale_type': 'linear smart', 'tick_levels': 3, 'tick_text_levels': 1,
             'text_format': r'\Large{%g}',
         }
@@ -220,7 +242,7 @@ def generate_nomograms():
         }
         
         if PLOT_ISOPLETHS:
-            block_params['isopleth_values'] = [[isopleth_wind, 'x', isopleth_fetch]]
+            block_params['isopleth_values'] = [[isopleth_U10, 'x', isopleth_fetch]] # Use U10 for isopleth
         
         main_params = {
             'filename': nomo["temp_file"], 'paper_height': 29.7, 'paper_width': 21,

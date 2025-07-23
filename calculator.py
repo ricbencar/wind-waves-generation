@@ -70,7 +70,25 @@ import sys # Import sys module to redirect stdout
 #
 # =============================================================================
 
-def calculate_deep_water(wind_speed, fetch, gravity=9.81):
+def calculate_adjusted_wind_speed(U10):
+    """
+    Calculates the adjusted wind speed (Ua) from the 10-meter wind speed (U10).
+
+    This adjustment accounts for the non-linear relationship between measured
+    wind speed and the actual wind stress at the water surface, as specified
+    in the Shore Protection Manual (SPM 1984).
+
+    Args:
+        U10 (float): The wind speed at 10m height over water (m/s).
+
+    Returns:
+        float: The adjusted wind speed (Ua) in m/s.
+    """
+    # Formula from SPM (1984): Ua = 0.71 * U10^1.23
+    Ua = 0.71 * (U10**1.23)
+    return Ua
+
+def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
     """
     Calculates fetch-limited wave properties in deep water using the SMB method.
 
@@ -81,7 +99,7 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
     state to become fully developed for the given fetch.
 
     Args:
-        wind_speed (float): The wind speed at 10m height over water (m/s).
+        wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
         fetch (float):      The effective fetch length (m).
         gravity (float):    The acceleration due to gravity (m/s^2).
 
@@ -96,7 +114,7 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
     # normalizes the fetch length (F) by the wind speed (U) and gravity (g),
     # forming the primary independent variable for the empirical formulas.
     # Formula: F_hat = g * F / U^2
-    dim_fetch = (gravity * fetch) / (wind_speed**2)
+    dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
     # --- Significant Wave Height (Hs) Calculation ---
     # This is the core Bretschneider formula for fetch-limited significant
@@ -105,7 +123,7 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
     # Ref: U.S. Army (1984), Shore Protection Manual.
     # Formula: (g * Hs) / U^2 = 0.283 * tanh[0.0125 * (g * F / U^2)^0.42]
     gHs_U2 = 0.283 * math.tanh(0.0125 * (dim_fetch**0.42))
-    Hs = gHs_U2 * (wind_speed**2 / gravity)
+    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
     # --- Significant Wave Period (Ts) Calculation ---
     # This formula provides the corresponding dimensionless relationship for
@@ -114,7 +132,7 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
     # Formula: (g * Ts) / U = 7.54 * tanh[0.077 * (g * F / U^2)^0.25]
     # The coefficient 7.54 is equivalent to 2.4 * pi.
     gTs_U = 7.54 * math.tanh(0.077 * (dim_fetch**0.25))
-    Ts = gTs_U * (wind_speed / gravity)
+    Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
     # This complex empirical formula calculates the minimum time required for a
@@ -126,12 +144,12 @@ def calculate_deep_water(wind_speed, fetch, gravity=9.81):
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed / gravity
+    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
 
     return Hs, Ts, t_min_hours
 
-def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
+def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
     """
     Calculates wave properties for depth-limited conditions.
 
@@ -141,7 +159,7 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     using the direct formula from the Coastal Engineering Manual.
 
     Args:
-        wind_speed (float): Wind speed at 10m height (m/s).
+        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
         fetch (float):      Effective fetch length (m).
         depth (float):      Water depth (m).
         gravity (float):    Acceleration of gravity (m/s^2).
@@ -152,8 +170,8 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     # --- Dimensionless Parameters ---
     # For depth-limited cases, both dimensionless fetch and dimensionless
     # depth are required to characterize the conditions.
-    dim_fetch = (gravity * fetch) / wind_speed**2
-    dim_depth = (gravity * depth) / wind_speed**2
+    dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
+    dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
     # --- Depth-Limited Significant Wave Height (Hs) ---
     # This formula combines the effects of fetch and depth. The outer tanh
@@ -162,7 +180,7 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     # Ref: U.S. Army (1984), Shore Protection Manual.
     term_h = 0.00565 * (dim_fetch)**0.5
     tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
 
     # --- Depth-Limited Significant Wave Period (Ts) ---
     # Similar to the height calculation, this formula combines dimensionless
@@ -171,7 +189,7 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     # Formula: (g * Ts) / U = 7.54 * tanh[0.0379 * (g * F / U^2)^0.333 / tanh(0.833 * (g * d / U^2)^0.375)]
     term_t = 0.0379 * (dim_fetch)**0.333
     tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
     # This complex empirical formula calculates the minimum time required for a
@@ -183,12 +201,12 @@ def calculate_depth_limited(wind_speed, fetch, depth, gravity=9.81):
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed / gravity
+    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
 
     return Hs, Ts, t_min_hours
 
-def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9.81):
+def calculate_duration_limited(wind_speed_adjusted, duration_hours, depth=None, gravity=9.81):
     """
     Calculates wave properties for duration-limited conditions, considering finite depth if provided.
 
@@ -199,7 +217,7 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
     conditions if the system were fetch-limited.
 
     Args:
-        wind_speed (float): Wind speed at 10m height (m/s).
+        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
         duration_hours (float): Duration of the wind event (hours).
         depth (float, optional): Water depth (m). If None, deep water formulas are used.
         gravity (float):    Acceleration of gravity (m/s^2).
@@ -217,7 +235,7 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
     # --- Dimensionless Duration Calculation ---
     # Dimensionless duration normalizes the duration (t) by wind speed (U) and gravity (g).
     # Formula: t_hat = g * t / U
-    dim_duration = (gravity * duration_seconds) / wind_speed
+    dim_duration = (gravity * duration_seconds) / wind_speed_adjusted
 
     if depth is None or depth == 0: # Treat as deep water if depth is not provided or zero
         # --- Significant Wave Height (Hs) Calculation for Duration-Limited (Deep Water) ---
@@ -225,14 +243,14 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         # Ref: U.S. Army (2008), Coastal Engineering Manual, Figure II-2-4-1.
         # Formula: (g * Hs) / U^2 = 0.283 * tanh[0.000528 * (g * t / U)^0.75]
         gHs_U2 = 0.283 * math.tanh(0.000528 * (dim_duration**0.75))
-        Hs = gHs_U2 * (wind_speed**2 / gravity)
+        Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
         # --- Significant Wave Period (Ts) Calculation for Duration-Limited (Deep Water) ---
         # This empirical formula relates dimensionless wave period to dimensionless duration.
         # Ref: U.S. Army (2008), Coastal Engineering Manual, Figure II-2-4-1.
         # Formula: (g * Ts) / U = 7.54 * tanh[0.00379 * (g * t / U)^0.41]
         gTs_U = 7.54 * math.tanh(0.00379 * (dim_duration**0.41))
-        Ts = gTs_U * (wind_speed / gravity)
+        Ts = gTs_U * (wind_speed_adjusted / gravity)
 
         # --- Equivalent Fetch Calculation (Deep Water) ---
         # Equating the arguments of the tanh function for dimensionless Hs in duration-limited
@@ -240,12 +258,12 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         # 0.000528 * (g * t / U)^0.75 = 0.0125 * (g * F / U^2)^0.42
         # Solving for (g * F / U^2) which is dim_fetch:
         dim_fetch_equivalent = ( (0.000528 / 0.0125) * (dim_duration**0.75) )**(1/0.42)
-        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed**2 / gravity)
+        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed_adjusted**2 / gravity)
         equivalent_fetch_km = equivalent_fetch_m / 1000 # Convert to kilometers
 
     else:
         # --- Dimensionless Depth Calculation ---
-        dim_depth = (gravity * depth) / wind_speed**2
+        dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
         # --- Heuristic for Duration-Limited Significant Wave Height (Finite Depth) ---
         # This is an adaptation. It combines the structure of the fetch-limited
@@ -255,14 +273,14 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         # Constants for depth influence are taken from fetch-limited depth-limited Hs.
         term_h_duration = 0.000528 * (dim_duration)**0.75 # From deep water duration-limited Hs
         tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75) # From fetch-limited depth-limited Hs
-        Hs = (wind_speed**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h_duration / tanh_depth_h)
+        Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h_duration / tanh_depth_h)
 
         # --- Heuristic for Duration-Limited Significant Wave Period (Finite Depth) ---
         # Similarly, this adapts the period formula.
         # Constants for depth influence are taken from fetch-limited depth-limited Ts.
         term_t_duration = 0.00379 * (dim_duration)**0.41 # From deep water duration-limited Ts
         tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375) # From fetch-limited depth-limited Ts
-        Ts = (wind_speed / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t_duration / tanh_depth_t)
+        Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t_duration / tanh_depth_t)
 
         # --- Equivalent Fetch Calculation (Finite Depth) ---
         # Equating the arguments of the inner tanh function for dimensionless Hs in duration-limited
@@ -272,7 +290,7 @@ def calculate_duration_limited(wind_speed, duration_hours, depth=None, gravity=9
         # 0.000528 * (g * t / U)^0.75 = 0.00565 * (g * F / U^2)^0.5
         # Solving for (g * F / U^2) which is dim_fetch:
         dim_fetch_equivalent = ( (0.000528 / 0.00565) * (dim_duration**0.75) )**2
-        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed**2 / gravity)
+        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed_adjusted**2 / gravity)
         equivalent_fetch_km = equivalent_fetch_m / 1000 # Convert to kilometers
 
     return Hs, Ts, equivalent_fetch_km
@@ -294,17 +312,21 @@ def main():
             print("  Sverdrup-Munk-Bretschneider (SMB) Wave Calculator")
             print("======================================================")
 
-            # --- Get User Inputs for Wind Speed ---
+            # --- Get User Inputs for Wind Speed (U10) ---
             while True:
                 try:
                     print()
-                    wind_speed = float(input("Enter wind speed at 10m height (m/s): "))
-                    if wind_speed <= 0:
-                        print("Wind speed must be a positive value.")
+                    U10 = float(input("Enter wind speed at 10m height (U10) (m/s): "))
+                    if U10 <= 0:
+                        print("Wind speed (U10) must be a positive value.")
                     else:
                         break # Exit loop if input is a valid positive number.
                 except ValueError:
-                    print("Invalid input. Please enter a numeric value for wind speed.")
+                    print("Invalid input. Please enter a numeric value for wind speed (U10).")
+
+            # --- Calculate Adjusted Wind Speed (Ua) ---
+            Ua = calculate_adjusted_wind_speed(U10)
+            print(f"Calculated Adjusted Wind Speed (Ua): {Ua:.2f} m/s")
 
             # --- Get User Inputs for Fetch and Duration ---
             # We will collect both fetch and duration to allow for comprehensive comparison.
@@ -353,12 +375,12 @@ def main():
 
             # --- Calculate for Fetch-Limited Scenario (based on input fetch) ---
             if depth_input is None:
-                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_deep_water(wind_speed, fetch_m)
+                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_deep_water(Ua, fetch_m)
             else:
-                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_depth_limited(wind_speed, fetch_m, depth_input)
+                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_depth_limited(Ua, fetch_m, depth_input)
             
             # --- Calculate for Duration-Limited Scenario (based on input duration) ---
-            hs_duration_potential, ts_duration_potential, equivalent_fetch_duration_potential = calculate_duration_limited(wind_speed, duration_input_hours, depth_input)
+            hs_duration_potential, ts_duration_potential, equivalent_fetch_duration_potential = calculate_duration_limited(Ua, duration_input_hours, depth_input)
 
             # --- Determine the Controlling Condition and Final Results ---
             # The actual wave height is the minimum of what fetch and duration allow.
