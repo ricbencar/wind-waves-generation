@@ -180,7 +180,7 @@ Generates a multi-page PDF containing three nomograms for **depth-limited (shall
 Generates a comprehensive PDF table summarizing SMB wave calculations for various combinations of wind speed, fetch, and depth.
 
 * **Functionality:**
-    * Calculates $H\_s$, $T\_s$, and $t_{min}$ for predefined ranges of **10-meter wind speeds ($U\_{10}$)** (5-35 m/s), fetches (0-50 km), and depths (Deep Water, 100m, 50m, 25m, 10m, 5m, 1m).
+    * Calculates $H\_s$, $T\_s$, and $t_{min}$ for predefined ranges of **10-meter wind speeds ($U\_{10}$)** (10-30 m/s), fetches (5-50 km), and depths (Deep Water, 50m, 25m, 10m, 5m).
     * Calculates the **adjusted wind speed ($U\_a$)** from $U\_{10}$ for all wave calculations within the table.
     * Organizes the results into a well-formatted table within a PDF document.
     * Uses `reportlab` for PDF generation, ensuring a professional and readable output.
