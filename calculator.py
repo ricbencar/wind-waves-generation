@@ -346,7 +346,7 @@ def main():
             # Get Duration Input
             while True:
                 try:
-                    duration_str = input("Enter storm duration (hours), or leave blank for effectively infinite duration: ").strip()
+                    duration_str = input("Enter storm duration (hours), or leave blank for infinite duration: ").strip()
                     if duration_str == "":
                         duration_input_hours = float('inf') # Set to infinity if blank
                         break
