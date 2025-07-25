@@ -136,9 +136,9 @@ def create_comprehensive_wave_table_pdf(output_filename="comprehensive_wave_calc
     headers = ["U10 (m/s)", "Fetch (km)", "Depth (m)", "Hs (m)", "Ts (s)", "Dur (h)"] # Changed header to U10
 
     # Define the ranges for calculations
-    fetches_km = list(range(0, 51, 5))  # 0 to 50 km, step 5 km
-    U10_speeds_mps = list(range(5, 36, 5)) # 5 to 35 m/s, step 5 m/s
-    depths_m = [999, 100, 50, 25, 10, 5, 1] # Specified depths
+    fetches_km = list(range(5, 51, 5))  # 5 to 50 km, step 5 km
+    U10_speeds_mps = list(range(10, 31, 5)) # 10 to 30 m/s, step 5 m/s
+    depths_m = [1000, 50, 25, 10, 5] # Specified depths
 
     data_rows = []
 
