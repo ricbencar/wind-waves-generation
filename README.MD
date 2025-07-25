@@ -229,8 +229,8 @@ Generates a comprehensive PDF table summarizing SMB wave calculations for variou
 
 ## Bibliography
 
-* U.S. Army. (2008). *Coastal Engineering Manual* (EM 1110-2-1100). Washington, DC: U.S. Army Corps of Engineers.
-* U.S. Army. (1984). *Shore Protection Manual*. Vicksburg, MS: U.S. Army Engineer Waterways Experiment Station.
+* U.S. Army. (2008). *Coastal Engineering Manual* (EM 1110-2-1100). Washington, DC: U.S. Army Corps of Engineers. URL: https://www.publications.usace.army.mil/USACE-Publications/Engineer-Manuals/u43544q/636F617374616C20656E67696E656572696E67206D616E75616C/
+* U.S. Army. (1984). *Shore Protection Manual*. Vicksburg, MS: U.S. Army Engineer Waterways Experiment Station. URL: https://archive.org/details/shoreprotectionm01unit & https://archive.org/details/shoreprotectionm02unit/page/n387/mode/2up
 * Bishop et al. (1992). Shore protection manual's wave prediction reviewed. Coastal Engineering, Volume 17, Issues 1–2, 1992, Pages 25-48, ISSN 0378-3839, https://doi.org/10.1016/0378-3839(92)90012-J.
 * Bretschneider, C. L. (1970). *Wave forecasting relations for wave generation*. Look Lab, Hawaii, 1(3).
-* Etemad-Shahidi, A., Kazeminezhad, M. H., & Mousavi, S. J. (2009). On the prediction of wave parameters using simplified methods. *Journal of Coastal Research, SI 56*, 505-509.
+* Etemad-Shahidi, A., Kazeminezhad, M. H., & Mousavi, S. J. (2009). On the prediction of wave parameters using simplified methods. *Journal of Coastal Research, SI 56*, 505-509. URL: https://www.jstor.org/stable/25737628
