@@ -1,10 +1,10 @@
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-
 # =============================================================================
 # SMB Wave Prediction Model (Depth-Limited Water)
 # =============================================================================
+
+import math
+import numpy as np
+import matplotlib.pyplot as plt
 
 def calculate_adjusted_wind_speed(U10):
     """
@@ -24,14 +24,13 @@ def calculate_adjusted_wind_speed(U10):
     Ua = 0.71 * (U10**1.23)
     return Ua
 
-def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
+def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     """
-    Calculates wave properties for depth-limited conditions using the SMB method.
+    Calculates wave properties for depth-limited conditions using the Revised SMB method.
 
-    This function uses SMB-based formulas adapted for shallow or transitional
-    depths, where wave growth is influenced by the seabed. The Hs and Ts
-    formulas are from the Shore Protection Manual. The duration is calculated
-    using the direct formula from the Coastal Engineering Manual.
+    This function implements the unified equations from Hurdle & Stive (1989),
+    which correct the inconsistencies found in the original SPM (1984) formulations
+    at the transition between deep and shallow water.
 
     Args:
         wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
@@ -43,34 +42,35 @@ def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
         tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
     """
     # --- Dimensionless Parameters ---
-    # For depth-limited cases, both dimensionless fetch and dimensionless
-    # depth are required to characterize the conditions.
     dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
     dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
-    # --- Depth-Limited Significant Wave Height (Hs) ---
-    # This formula combines the effects of fetch and depth. The outer tanh
-    # term accounts for the depth limitation, while the inner tanh term
-    # accounts for the fetch limitation.
-    # Ref: U.S. Army (1984), Shore Protection Manual.
-    term_h = 0.00565 * (dim_fetch)**0.5
-    tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    # --- Revised Significant Wave Height (Hs) ---
+    # Hurdle & Stive (1989), Eq 4.1
+    # Coefficient is 0.25 (vs 0.283 in SPM)
+    # Depth term: tanh(0.6 * d_hat^0.75)
+    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
+    # Exponent: 0.5
+    depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
+    
+    gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
+    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Depth-Limited Significant Wave Period (Ts) ---
-    # Similar to the height calculation, this formula combines dimensionless
-    # fetch and depth to determine the period.
-    # Ref: U.S. Army (1984), Shore Protection Manual.
-    term_t = 0.0379 * (dim_fetch)**0.333
-    tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    # --- Revised Significant Wave Period (Ts) ---
+    # Hurdle & Stive (1989), Eq 4.2
+    # Coefficient is 8.3 (vs 7.54 in SPM)
+    # Depth term: tanh(0.76 * d_hat^0.375)
+    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
+    # Exponent: 1/3
+    depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
+    
+    gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
+    Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # This complex empirical formula calculates the minimum time required for a
-    # given wind speed and fetch to generate a fully fetch-limited sea. If the
-    # actual storm duration is less than this value, the sea state would be
-    # considered duration-limited.
-    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
+    # Retained from Etemad-Shahidi et al. (2009) as requested.
     log_dim_fetch = math.log(dim_fetch)
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
@@ -183,7 +183,7 @@ if __name__ == "__main__":
     FETCH_KM_MAX = 50
     NUM_FETCH_STEPS = 50
 
-    FIXED_DEPTH = 10 # Fixed depth of 10 meters as requested
+    FIXED_DEPTH = 10 # Fixed depth of 10 meters
 
     generate_combined_chart_depth_limited(WIND_SPEED_MIN, WIND_SPEED_MAX, NUM_WIND_STEPS,
                                           FETCH_KM_MIN, FETCH_KM_MAX, NUM_FETCH_STEPS,

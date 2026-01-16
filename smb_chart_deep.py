@@ -1,10 +1,10 @@
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-
 # =============================================================================
 # SMB Wave Prediction Model (Deep Water)
 # =============================================================================
+
+import math
+import numpy as np
+import matplotlib.pyplot as plt
 
 def calculate_adjusted_wind_speed(U10):
     """
@@ -24,9 +24,13 @@ def calculate_adjusted_wind_speed(U10):
     Ua = 0.71 * (U10**1.23)
     return Ua
 
-def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
+def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
     """
-    Calculates fetch-limited wave properties in deep water using the SMB method.
+    Calculates fetch-limited wave properties in deep water using the Revised SMB method.
+
+    This function uses the deep-water asymptotic limit of the Hurdle & Stive (1989)
+    unified equations. This ensures that deep water calculations are perfectly
+    consistent with depth-limited calculations as depth increases.
 
     Args:
         wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
@@ -39,17 +43,23 @@ def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
             - Ts (float): Predicted significant wave period (s).
             - t_min (float): Minimum wind duration for fetch-limited state (hours).
     """
-    # Dimensionless Fetch Calculation: F_hat = g * F / U^2
+    # --- Dimensionless Fetch Calculation ---
+    # F_hat = g * F / Ua^2
     dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
-    # Significant Wave Height (Hs) Calculation
-    # (g * Hs) / U^2 = 0.283 * tanh[0.0125 * (g * F / U^2)^0.42]
-    gHs_U2 = 0.283 * math.tanh(0.0125 * (dim_fetch**0.42))
+    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
+    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
+    # Note: tanh^0.5(x) denotes sqrt(tanh(x))
+    term_fetch_h = 4.3e-5 * dim_fetch
+    gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # Significant Wave Period (Ts) Calculation
-    # (g * Ts) / U = 7.54 * tanh[0.077 * (g * F / U^2)^0.25]
-    gTs_U = 7.54 * math.tanh(0.077 * (dim_fetch**0.25))
+    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
+    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    term_fetch_t = 4.1e-5 * dim_fetch
+    gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
@@ -158,7 +168,7 @@ def generate_combined_chart(min_wind_speed, max_wind_speed, num_wind_steps,
 
 
 if __name__ == "__main__":
-    # Define the parameters for the charts as per user's request
+    # Define the parameters for the charts
     WIND_SPEED_MIN = 5
     WIND_SPEED_MAX = 35
     NUM_WIND_STEPS = 50

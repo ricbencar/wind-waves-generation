@@ -1,0 +1,55 @@
+
+============================================================
+  SMB WAVE PREDICTION REPORT
+============================================================
+
+------------------------------------------------------------
+  1. INPUT PARAMETERS
+------------------------------------------------------------
+  Wind Speed (U10)          : 30.0000     m/s     
+  Adjusted Speed (Ua)       : 46.5712     m/s     
+  Fetch Length              : 14.0000     km      
+  Storm Duration            : Infinite    hours   
+  Water Depth               : 14.0000     m       
+
+------------------------------------------------------------
+  2. LIMITING CONDITIONS
+------------------------------------------------------------
+  Controlling Factor        : FETCH-LIMITED        
+
+  Determining Parameters:
+  Min Duration Req.         : 0.8847      hours   
+  Given Fetch               : 14.0000     km      
+
+------------------------------------------------------------
+  3. PREDICTION RESULTS
+------------------------------------------------------------
+  Sig. Wave Height (Hs)     : 2.7828      m       
+  Sig. Wave Period (Ts)     : 5.4048      s       
+  Wave Celerity (C)         : 8.1329      m/s     
+  Wave Length (L)           : 43.9564     m       
+  Wave Number (k)           : 0.1429      rad/m   
+
+------------------------------------------------------------
+  4. INSIGHTS & OBSERVATIONS
+------------------------------------------------------------
+  >> STATE: Fully Developed for Fetch.
+     Waves have reached maximum size for this distance.
+
+  >> Flow Regime            : Transitional/Intermediate        
+     Calculated Steepness   : 0.0633      -       
+     Miche Limit (H/L)      : 0.1369      -       
+     >> BREAKING STATUS     : STABLE              
+        Stability Margin    : 53.7577     %       
+     Depth Ratio (Hs/d)     : 0.1988      -       
+
+------------------------------------------------------------
+  5. SCENARIO ANALYSIS
+------------------------------------------------------------
+  [A] Fetch-Limited Potential
+      - Potential Hs        : 2.7828      m       
+      - Potential Ts        : 5.4048      s       
+      - Time to Develop     : 0.8847      hours   
+
+  [B] Duration-Limited Potential
+      - Not applicable (Duration is infinite)

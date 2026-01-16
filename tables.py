@@ -1,12 +1,12 @@
+# =============================================================================
+# SMB Wave Prediction Model Functions
+# =============================================================================
+
 import math
 from reportlab.lib.pagesizes import A4 # Import A4 for portrait
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-
-# =============================================================================
-# SMB Wave Prediction Model Functions
-# =============================================================================
 
 def calculate_adjusted_wind_speed(U10):
     """
@@ -26,9 +26,13 @@ def calculate_adjusted_wind_speed(U10):
     Ua = 0.71 * (U10**1.23)
     return Ua
 
-def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
+def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
     """
-    Calculates fetch-limited wave properties in deep water using the SMB method.
+    Calculates fetch-limited wave properties in deep water using the Revised SMB method.
+
+    This function uses the deep-water asymptotic limit of the Hurdle & Stive (1989)
+    unified equations. This ensures that deep water calculations are perfectly
+    consistent with depth-limited calculations as depth increases.
 
     Args:
         wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
@@ -41,24 +45,31 @@ def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
             - Ts (float): Predicted significant wave period (s).
             - t_min (float): Minimum wind duration for fetch-limited state (hours).
     """
-    # Handle the case where fetch is zero, as log(0) is undefined.
-    # For zero fetch, no waves are generated, so Hs, Ts, and Duration are 0.
+    # Handle the case where fetch is zero
     if fetch <= 0:
         return 0.0, 0.0, 0.0
 
-    # Dimensionless Fetch Calculation: F_hat = g * F / U^2
+    # --- Dimensionless Fetch Calculation ---
+    # F_hat = g * F / Ua^2
     dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
-    # Significant Wave Height (Hs) Calculation: (g * Hs) / U^2 = 0.283 * tanh[0.0125 * (g * F / U^2)^0.42]
-    gHs_U2 = 0.283 * math.tanh(0.0125 * (dim_fetch**0.42))
+    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
+    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
+    term_fetch_h = 4.3e-5 * dim_fetch
+    gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # Significant Wave Period (Ts) Calculation: (g * Ts) / U = 7.54 * tanh[0.077 * (g * F / U^2)^0.25]
-    gTs_U = 7.54 * math.tanh(0.077 * (dim_fetch**0.25))
+    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
+    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    term_fetch_t = 4.1e-5 * dim_fetch
+    gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
-    # Minimum Wind Duration (t_min) Calculation: Empirical formula
-    log_dim_fetch = math.log(dim_fetch) # This line caused the error when dim_fetch was 0
+    # --- Minimum Wind Duration (t_min) Calculation ---
+    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
+    log_dim_fetch = math.log(dim_fetch)
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
     gt_min_U = 6.5882 * math.exp(exponent_term)
@@ -67,12 +78,13 @@ def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
 
     return Hs, Ts, t_min_hours
 
-def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
+def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     """
-    Calculates wave properties for depth-limited conditions.
+    Calculates wave properties for depth-limited conditions using the Revised SMB method.
 
-    This function uses SMB-based formulas adapted for shallow or transitional
-    depths, where wave growth is influenced by the seabed.
+    This function implements the unified equations from Hurdle & Stive (1989),
+    which correct the inconsistencies found in the original SPM (1984) formulations
+    at the transition between deep and shallow water.
 
     Args:
         wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
@@ -83,27 +95,38 @@ def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.81):
     Returns:
         tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
     """
-    # Handle the case where fetch is zero, as log(0) is undefined in duration calculation.
-    # For zero fetch, no waves are generated, so Hs, Ts, and Duration are 0.
+    # Handle the case where fetch is zero
     if fetch <= 0:
         return 0.0, 0.0, 0.0
 
-    # Dimensionless Parameters
+    # --- Dimensionless Parameters ---
     dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
     dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
-    # Depth-Limited Significant Wave Height (Hs)
-    term_h = 0.00565 * (dim_fetch)**0.5
-    tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    # --- Revised Significant Wave Height (Hs) ---
+    # Hurdle & Stive (1989), Eq 4.1
+    # Coefficient is 0.25 (vs 0.283 in SPM)
+    # Depth term: tanh(0.6 * d_hat^0.75)
+    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
+    depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
+    
+    gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
+    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # Depth-Limited Significant Wave Period (Ts)
-    term_t = 0.0379 * (dim_fetch)**0.333
-    tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    # --- Revised Significant Wave Period (Ts) ---
+    # Hurdle & Stive (1989), Eq 4.2
+    # Coefficient is 8.3 (vs 7.54 in SPM)
+    # Depth term: tanh(0.76 * d_hat^0.375)
+    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
+    depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
+    
+    gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
+    Ts = gTs_U * (wind_speed_adjusted / gravity)
 
-    # Minimum Wind Duration (t_min) Calculation (same as deep water for consistency with original script)
-    # This part was the source of the error if dim_fetch was 0
+    # --- Minimum Wind Duration (t_min) Calculation ---
+    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
     log_dim_fetch = math.log(dim_fetch)
     A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
     exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
@@ -138,7 +161,7 @@ def create_comprehensive_wave_table_pdf(output_filename="comprehensive_wave_calc
     # Define the ranges for calculations
     fetches_km = list(range(5, 51, 5))  # 5 to 50 km, step 5 km
     U10_speeds_mps = list(range(10, 31, 5)) # 10 to 30 m/s, step 5 m/s
-    depths_m = [1000, 50, 25, 10, 5] # Specified depths
+    depths_m = [5, 10, 25, 50, 1000] # Specified depths
 
     data_rows = []
 

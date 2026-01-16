@@ -15,8 +15,11 @@ with separate pages for:
 Each nomogram includes an isopleth for the Lake Garda example
 (Wind Speed = 25 m/s, Fetch = 45 km) calculated for a 10m depth.
 
-The calculations are based on the depth-limited formulas documented in the
-U.S. Army Corps of Engineers' Coastal Engineering Manual and Shore Protection Manual.
+UPDATED FORMULATION (Hurdle & Stive, 1989):
+The calculations for Hs and Ts have been updated to use the revised unified
+equations from Hurdle & Stive (1989). These formulas correct the inconsistencies
+found in the original SPM (1984) shallow water equations, providing a smooth
+transition between depth-limited and deep water conditions.
 """
 
 import sys
@@ -79,14 +82,13 @@ def calculate_adjusted_wind_speed(U10):
     Ua = 0.71 * (U10**1.23)
     return Ua
 
-def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.81):
+def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     """
-    Calculates wave properties for depth-limited conditions.
+    Calculates wave properties for depth-limited conditions using the Revised SMB method.
 
-    This function uses SMB-based formulas adapted for shallow or transitional
-    depths, where wave growth is influenced by the seabed. The Hs and Ts
-    formulas are from the Shore Protection Manual. The duration is calculated
-    using the direct formula from the Coastal Engineering Manual.
+    This function implements the unified equations from Hurdle & Stive (1989),
+    which correct the inconsistencies found in the original SPM (1984) formulations
+    at the transition between deep and shallow water.
 
     Args:
         wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
@@ -101,27 +103,32 @@ def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.81):
         return 0, 0, 0
 
     # --- Dimensionless Parameters ---
-    # For depth-limited cases, both dimensionless fetch and dimensionless
-    # depth are required to characterize the conditions.
     dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
     dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
-    # --- Depth-Limited Significant Wave Height (Hs) ---
-    # This formula combines the effects of fetch and depth. The outer tanh
-    # term accounts for the depth limitation, while the inner tanh term
-    # accounts for the fetch limitation.
-    # Ref: U.S. Army (1984), Shore Protection Manual.
-    term_h = 0.00565 * (dim_fetch)**0.5
-    tanh_depth_h = math.tanh(0.530 * (dim_depth)**0.75)
-    Hs = (wind_speed_adjusted**2 / gravity) * 0.283 * tanh_depth_h * math.tanh(term_h / tanh_depth_h)
+    # --- Revised Significant Wave Height (Hs) ---
+    # Hurdle & Stive (1989), Eq 4.1
+    # Coefficient is 0.25 (vs 0.283 in SPM)
+    # Depth term: tanh(0.6 * d_hat^0.75)
+    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
+    # Exponent: 0.5
+    depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
+    
+    gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
+    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Depth-Limited Significant Wave Period (Ts) ---
-    # Similar to the height calculation, this formula combines dimensionless
-    # fetch and depth to determine the period.
-    # Ref: U.S. Army (1984), Shore Protection Manual.
-    term_t = 0.0379 * (dim_fetch)**0.333
-    tanh_depth_t = math.tanh(0.833 * (dim_depth)**0.375)
-    Ts = (wind_speed_adjusted / gravity) * 7.54 * tanh_depth_t * math.tanh(term_t / tanh_depth_t)
+    # --- Revised Significant Wave Period (Ts) ---
+    # Hurdle & Stive (1989), Eq 4.2
+    # Coefficient is 8.3 (vs 7.54 in SPM)
+    # Depth term: tanh(0.76 * d_hat^0.375)
+    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
+    # Exponent: 1/3
+    depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
+    
+    gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
+    Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
     # This complex empirical formula calculates the minimum time required for a

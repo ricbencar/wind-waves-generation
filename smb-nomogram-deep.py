@@ -12,8 +12,11 @@ file named 'smb-nomogram-deep.pdf' with separate pages for:
 Each nomogram includes an isopleth for the Lake Garda example
 (Wind Speed = 25 m/s, Fetch = 45 km).
 
-The calculations are based on the deep-water formulas documented in the
-U.S. Army Corps of Engineers' Coastal Engineering Manual and Shore Protection Manual.
+UPDATED FORMULATION (Hurdle & Stive, 1989):
+The calculations for Hs and Ts have been updated to use the revised unified
+equations from Hurdle & Stive (1989), specifically their deep-water asymptotic
+limits. This ensures consistency with the calculator tool and avoids the
+inconsistencies found in the original SPM (1984) formulations.
 """
 
 import sys
@@ -68,17 +71,32 @@ def calculate_adjusted_wind_speed(U10):
     Ua = 0.71 * (U10**1.23)
     return Ua
 
-def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.81):
+def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
     """
-    Calculates fetch-limited wave properties in deep water using the SMB method.
+    Calculates fetch-limited wave properties in deep water using the Revised SMB method.
+
+    This function uses the deep-water asymptotic limit of the Hurdle & Stive (1989)
+    unified equations. This ensures that deep water calculations are perfectly
+    consistent with depth-limited calculations as depth increases.
     """
     if wind_speed_adjusted <= 0 or fetch <= 0:
         return 0, 0, 0
         
+    # --- Dimensionless Fetch Calculation ---
     dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
-    gHs_U2 = 0.283 * math.tanh(0.0125 * (dim_fetch**0.42))
+
+    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
+    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
+    term_fetch_h = 4.3e-5 * dim_fetch
+    gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
-    gTs_U = 7.54 * math.tanh(0.077 * (dim_fetch**0.25))
+
+    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
+    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
+    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    term_fetch_t = 4.1e-5 * dim_fetch
+    gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
