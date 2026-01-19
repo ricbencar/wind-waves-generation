@@ -35,7 +35,7 @@ scipy.arange = np.arange
 
 # --- Optional parameter to control isopleth plotting ---
 # Set this to True to plot the isopleths (example lines) or False to hide them.
-PLOT_ISOPLETHS = False
+PLOT_ISOPLETHS = True
 # -------------------------------------------------------------
 
 # --- Configuration for Shallow Water ---
@@ -85,19 +85,6 @@ def calculate_adjusted_wind_speed(U10):
 def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     """
     Calculates wave properties for depth-limited conditions using the Revised SMB method.
-
-    This function implements the unified equations from Hurdle & Stive (1989),
-    which correct the inconsistencies found in the original SPM (1984) formulations
-    at the transition between deep and shallow water.
-
-    Args:
-        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
-        fetch (float):      Effective fetch length (m).
-        depth (float):      Water depth (m).
-        gravity (float):    Acceleration of gravity (m/s^2).
-
-    Returns:
-        tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
     """
     if wind_speed_adjusted <= 0 or fetch <= 0 or depth <= 0:
         return 0, 0, 0
@@ -108,40 +95,31 @@ def calculate_shallow_water(wind_speed_adjusted, fetch, depth, gravity=9.8066):
 
     # --- Revised Significant Wave Height (Hs) ---
     # Hurdle & Stive (1989), Eq 4.1
-    # Coefficient is 0.25 (vs 0.283 in SPM)
-    # Depth term: tanh(0.6 * d_hat^0.75)
-    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
-    # Exponent: 0.5
     depth_term_h = math.tanh(0.6 * dim_depth**0.75)
-    fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
+    # Protection against division by zero if depth is extremely small
+    if depth_term_h == 0: depth_term_h = 1e-6
     
+    fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
     gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
     # --- Revised Significant Wave Period (Ts) ---
     # Hurdle & Stive (1989), Eq 4.2
-    # Coefficient is 8.3 (vs 7.54 in SPM)
-    # Depth term: tanh(0.76 * d_hat^0.375)
-    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
-    # Exponent: 1/3
     depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    if depth_term_t == 0: depth_term_t = 1e-6
+
     fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
-    
     gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # This complex empirical formula calculates the minimum time required for a
-    # given wind speed and fetch to generate a fully fetch-limited sea. If the
-    # actual storm duration is less than this value, the sea state would be
-    # considered duration-limited.
-    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
-    t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
+    # REVISED (Hurdle & Stive, 1989, Eq 4.12 & Section 4.4)
+    # The paper recommends using the deep water power law for limiting duration
+    # in all circumstances to ensure consistent "Effective Fetch" inversion.
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    
+    t_min_seconds = dim_duration * wind_speed_adjusted / gravity
+    t_min_hours = t_min_seconds / 3600
 
     return Hs, Ts, t_min_hours
 
@@ -202,15 +180,16 @@ def generate_nomograms():
     for nomo in nomograms_to_build:
         print(f"\nGenerating temporary nomogram for: {nomo['title']}")
         temp_files.append(nomo["temp_file"])
-        
+    
         # --- Find true min/max of the output function by searching a grid ---
-        grid_points = 20
+        grid_points = 200 
         wind_range = np.linspace(wind_min, wind_max, grid_points)
         fetch_range = np.linspace(fetch_min, fetch_max, grid_points)
-        output_values = [nomo["nomo_func"](w, f) for w in wind_range for f in fetch_range if nomo["nomo_func"](w, f) > 0]
         
-        out_min = min(output_values) if output_values else 0
-        out_max = max(output_values) if output_values else 1
+        output_values = [nomo["nomo_func"](w, f) for w in wind_range for f in fetch_range]
+        
+        out_min = min(output_values)
+        out_max = max(output_values)
 
         # Ensure the isopleth value is within the scale range
         if "Height" in nomo["title"]:
@@ -256,7 +235,7 @@ def generate_nomograms():
             'block_params': [block_params], 'transformations': [('scale paper',)],
             'title_str': f"\\Large SMB Shallow Water Nomogram (d={WATER_DEPTH}m): {nomo['title']}",
             'isopleth_params': [{'color': 'Blue', 'linewidth': 'thick', 'circle_size': 0.1}],
-            'npoints': 11,
+            'npoints': 16,
         }
 
         Nomogen(nomo['nomo_func'], main_params)

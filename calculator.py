@@ -18,16 +18,16 @@
 #      hyperbolic structures for depth attenuation.
 #   2. Unified Logic: The same equation structure applies to both deep and
 #      finite-depth water, ensuring mathematical consistency across domains.
-#   3. Asymptotic Consistency: Duration-limited formulas have been adapted with
-#      the revised coefficients to ensure they asymptote to the same
-#      fully-developed limits as the fetch-limited equations.
-#   4. Minimum Duration: Retains the modern approximation by Etemad-Shahidi
-#      et al. (2009) for calculating t_min.
+#   3. Asymptotic Consistency: The model enforces strictly consistent asymptotic 
+#      limits for both fetch and duration-limited growth.
+#   4. Minimum Duration: Uses the Hurdle & Stive (1989) power law (Eq. 4.12)
+#      to determine the minimum time required for fetch-limited conditions.
 #
 # CALCULATION MODES:
 #   1. Fetch-Limited: Uses Hurdle & Stive (1989) unified equations.
-#   2. Duration-Limited: Uses CEM/SPM time-growth equations adapted with
-#      Hurdle & Stive coefficients (0.25/8.3) to maintain model consistency.
+#   2. Duration-Limited: Uses the "Effective Fetch" method (Hurdle & Stive, 
+#      1989, Eq 4.13). This inverts the minimum duration power law to find
+#      an equivalent fetch, ensuring kinematic consistency.
 #
 # BIBLIOGRAPHY:
 #
@@ -73,388 +73,410 @@
 #   prediction of wave parameters using simplified methods. Journal of Coastal
 #   Research, SI 56, 505-509.
 #   - Validates the SMB equations against modern methods.
-#
-# =============================================================================
-import math
-import numpy as np
-import sys # Import sys module to redirect stdout
 
-def calculate_adjusted_wind_speed(U10):
+import math
+import sys
+from typing import Tuple, Optional
+
+# --- Constants ---
+G_STD = 9.8066
+PI = 3.14159265358979323846
+
+# =============================================================================
+#  SECTION 1: PHYSICS ENGINE
+# =============================================================================
+
+def calculate_adjusted_wind_speed(U10: float) -> float:
     """
     Calculates the adjusted wind speed (Ua) from the 10-meter wind speed (U10).
+    Formula: Ua = 0.71 * U10^1.23 (SPM 1984)
+    """
+    return 0.71 * (U10**1.23)
 
-    This adjustment accounts for the non-linear relationship between measured
-    wind speed and the actual wind stress at the water surface, as specified
-    in the Shore Protection Manual (SPM 1984).
-
+def solve_dispersion(T: float, d: float, tol: float = 1e-15, max_iter: int = 100) -> float:
+    """
+    Solves the transcendental Linear Dispersion Relation using Newton-Raphson.
+    
+    Equation: L = (g * T^2 / 2pi) * tanh( 2pi * d / L )
+    We solve for dimensionless wavenumber kh = k * d.
+    
     Args:
-        U10 (float): The wind speed at 10m height over water (m/s).
-
+        T (float): Wave Period (s)
+        d (float): Water Depth (m)
+    
     Returns:
-        float: The adjusted wind speed (Ua) in m/s.
+        float: The dimensionless wavenumber kh = k*d
     """
-    # Formula from SPM (1984): Ua = 0.71 * U10^1.23
-    Ua = 0.71 * (U10**1.23)
-    return Ua
+    if d <= 0:
+        return 0.0
+    
+    omega = 2.0 * PI / T
+    k0 = (omega * omega) / G_STD
+    k0h = k0 * d
+    
+    # Initial Guess (Carvalho 2006 explicit approximation)
+    # This provides a very close starting point for Newton-Raphson
+    if k0h > 0:
+        kh = k0h / math.tanh((6.0/5.0)**k0h * math.sqrt(k0h))
+    else:
+        return 0.0
 
-def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
+    # Newton-Raphson Iteration
+    for _ in range(max_iter):
+        t_kh = math.tanh(kh)
+        f = k0h - kh * t_kh
+        sech = 1.0 / math.cosh(kh)
+        df = -t_kh - kh * (sech * sech)
+        
+        if abs(df) < 1e-15:
+            break
+        
+        dkh = f / df
+        kh_new = kh - dkh
+        
+        if abs(dkh / kh) < tol:
+            return kh_new
+        kh = kh_new
+        
+    return kh
+
+def calculate_deep_water(Ua: float, fetch_m: float) -> Tuple[float, float, float, float]:
     """
-    Calculates fetch-limited wave properties in deep water using the Revised SMB method.
-
-    This function uses the deep-water asymptotic limit of the Hurdle & Stive (1989)
-    unified equations. This ensures that deep water calculations are perfectly
-    consistent with depth-limited calculations as depth increases.
-
-    Args:
-        wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
-        fetch (float):      The effective fetch length (m).
-        gravity (float):    The acceleration due to gravity (m/s^2).
-
+    Calculates fetch-limited wave properties in deep water using Revised SMB.
+    
     Returns:
-        tuple: A tuple containing:
-            - Hs (float): Predicted significant wave height (m).
-            - Ts (float): Predicted significant wave period (s).
-            - t_min (float): Minimum wind duration for fetch-limited state (hours).
+        (Hs, Ts, t_min_hours, equivalent_fetch_km)
     """
-    # --- Dimensionless Fetch Calculation ---
-    # F_hat = g * F / Ua^2
-    dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
+    # Dimensionless Fetch: F_hat = g * F / Ua^2
+    dim_fetch = (G_STD * fetch_m) / (Ua**2)
 
-    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
-    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
-    # Note: tanh^0.5(x) denotes sqrt(tanh(x))
+    # Hs Calculation (Deep Water Asymptote)
     term_fetch_h = 4.3e-5 * dim_fetch
     gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
-    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
+    Hs = gHs_U2 * (Ua**2 / G_STD)
 
-    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
-    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    # Ts Calculation (Deep Water Asymptote)
     term_fetch_t = 4.1e-5 * dim_fetch
     gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
-    Ts = gTs_U * (wind_speed_adjusted / gravity)
+    Ts = gTs_U * (Ua / G_STD)
 
-    # --- Minimum Wind Duration (t_min) Calculation ---
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
-    t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
+    # Minimum Duration (t_min) - Hurdle & Stive (1989) Eq 4.12
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    t_min_seconds = dim_duration * Ua / G_STD
+    t_min_hours = t_min_seconds / 3600.0
 
-    return Hs, Ts, t_min_hours
+    return Hs, Ts, t_min_hours, 0.0
 
-def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.8066):
+def calculate_depth_limited(Ua: float, fetch_m: float, depth: float) -> Tuple[float, float, float, float]:
     """
-    Calculates wave properties for depth-limited conditions using the Revised SMB method.
-
-    This function implements the unified equations from Hurdle & Stive (1989),
-    which correct the inconsistencies found in the original SPM (1984) formulations
-    at the transition between deep and shallow water.
-
-    Args:
-        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
-        fetch (float):      Effective fetch length (m).
-        depth (float):      Water depth (m).
-        gravity (float):    Acceleration of gravity (m/s^2).
-
+    Calculates fetch-limited wave properties for finite depth using Revised SMB.
+    
     Returns:
-        tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
+        (Hs, Ts, t_min_hours, equivalent_fetch_km)
     """
-    # --- Dimensionless Parameters ---
-    dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
-    dim_depth = (gravity * depth) / wind_speed_adjusted**2
+    dim_fetch = (G_STD * fetch_m) / (Ua**2)
+    dim_depth = (G_STD * depth) / (Ua**2)
 
-    # --- Revised Significant Wave Height (Hs) ---
-    # Hurdle & Stive (1989), Eq 4.1
-    # Coefficient is 0.25 (vs 0.283 in SPM)
-    # Depth term: tanh(0.6 * d_hat^0.75)
-    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
-    # Exponent: 0.5
+    # Hs Calculation - Hurdle & Stive (1989) Eq 4.1
     depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    if depth_term_h < 1e-6:
+        depth_term_h = 1e-6
+
     fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
-    
     gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
-    Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
+    Hs = gHs_U2 * (Ua**2 / G_STD)
 
-    # --- Revised Significant Wave Period (Ts) ---
-    # Hurdle & Stive (1989), Eq 4.2
-    # Coefficient is 8.3 (vs 7.54 in SPM)
-    # Depth term: tanh(0.76 * d_hat^0.375)
-    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
-    # Exponent: 1/3
+    # Ts Calculation - Hurdle & Stive (1989) Eq 4.2
     depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    if depth_term_t < 1e-6:
+        depth_term_t = 1e-6
+
     fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
-    
     gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
-    Ts = gTs_U * (wind_speed_adjusted / gravity)
+    Ts = gTs_U * (Ua / G_STD)
 
-    # --- Minimum Wind Duration (t_min) Calculation ---
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
-    t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
+    # Minimum Duration (t_min) - Recommends deep water power law for consistency
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    t_min_seconds = dim_duration * Ua / G_STD
+    t_min_hours = t_min_seconds / 3600.0
 
-    return Hs, Ts, t_min_hours
+    return Hs, Ts, t_min_hours, 0.0
 
-def calculate_duration_limited(wind_speed_adjusted, duration_hours, depth=None, gravity=9.8066):
+def calculate_duration_limited(Ua: float, duration_hours: float, depth: Optional[float] = None) -> Tuple[float, float, float, float]:
     """
-    Calculates wave properties for duration-limited conditions, considering finite depth if provided.
-
-    UPDATED COEFFICIENTS (Hurdle & Stive, 1989 Compatibility):
-    This function has been updated to use the leading coefficients (0.25, 8.3)
-    and depth-damping factors (0.6, 0.76) from the Hurdle & Stive (1989) revision.
-    This ensures that as time -> infinity, the wave parameters asymptote to the
-    same fully-developed limits as the revised fetch-limited model, preventing
-    inconsistencies.
-
-    Args:
-        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
-        duration_hours (float): Duration of the wind event (hours).
-        depth (float, optional): Water depth (m). If None, deep water formulas are used.
-        gravity (float):    Acceleration of gravity (m/s^2).
-
+    Calculates wave properties for duration-limited conditions using Effective Fetch.
+    
     Returns:
-        tuple: A tuple containing:
-            - Hs (float): Predicted significant wave height (m).
-            - Ts (float): Predicted significant wave period (s).
-            - equivalent_fetch_km (float): The equivalent fetch length (km) that would
-                                           produce the same wave conditions if fetch-limited.
+        (Hs, Ts, t_min_hours, equivalent_fetch_km)
     """
-    # Convert duration from hours to seconds
-    duration_seconds = duration_hours * 3600
+    duration_seconds = duration_hours * 3600.0
+    
+    # 1. Dimensionless Duration: t_hat = g * t / Ua
+    dim_duration = (G_STD * duration_seconds) / Ua
+    
+    # 2. Effective Fetch (Eq 4.13): F_hat' = (t_hat / 65.9)^(1.5)
+    dim_fetch_equivalent = (dim_duration / 65.9)**1.5
+    
+    # Convert back to meters
+    equivalent_fetch_m = dim_fetch_equivalent * (Ua**2 / G_STD)
+    equivalent_fetch_km = equivalent_fetch_m / 1000.0
 
-    # --- Dimensionless Duration Calculation ---
-    # Formula: t_hat = g * t / U
-    dim_duration = (gravity * duration_seconds) / wind_speed_adjusted
-
-    if depth is None or depth == 0: # Treat as deep water if depth is not provided or zero
-        # --- Significant Wave Height (Hs) - Deep Water ---
-        # Coefficient updated to 0.25 (Hurdle & Stive asymptote)
-        # Note: Retaining CEM time-growth exponent 0.75
-        gHs_U2 = 0.25 * math.tanh(0.000528 * (dim_duration**0.75))
-        Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
-
-        # --- Significant Wave Period (Ts) - Deep Water ---
-        # Coefficient updated to 8.3 (Hurdle & Stive asymptote)
-        # Note: Retaining CEM time-growth exponent 0.41
-        gTs_U = 8.3 * math.tanh(0.00379 * (dim_duration**0.41))
-        Ts = gTs_U * (wind_speed_adjusted / gravity)
-
-        # --- Equivalent Fetch Calculation (Deep Water) ---
-        # Calculated using the Hurdle & Stive deep water fetch limit: 0.25 * (tanh(4.3e-5 * F_hat))^0.5
-        # Equating H_hat(duration) = H_hat(fetch):
-        # tanh(0.000528 * t_hat^0.75) = (tanh(4.3e-5 * F_hat))^0.5
-        # F_hat = atanh( tanh(time_term)^2 ) / 4.3e-5
-        # Note: This is an approximation to map the new coefficients.
-        try:
-            time_term = 0.000528 * (dim_duration**0.75)
-            # Prevent domain error if time_term is large (tanh -> 1)
-            if time_term > 10: 
-                tanh_sq = 1.0
-            else:
-                tanh_sq = math.tanh(time_term)**2
-            
-            # Avoid singularity at fully developed state
-            if tanh_sq >= 1.0:
-                dim_fetch_equivalent = 200000 # Large number representing fully developed
-            else:
-                dim_fetch_equivalent = math.atanh(tanh_sq) / 4.3e-5
-                
-            equivalent_fetch_m = dim_fetch_equivalent * (wind_speed_adjusted**2 / gravity)
-            equivalent_fetch_km = equivalent_fetch_m / 1000
-        except ValueError:
-            equivalent_fetch_km = 0.0
-
+    # 3. Calculate Waves using Effective Fetch
+    if depth is None:
+        Hs, Ts, _, _ = calculate_deep_water(Ua, equivalent_fetch_m)
     else:
-        # --- Dimensionless Depth Calculation ---
-        dim_depth = (gravity * depth) / wind_speed_adjusted**2
+        Hs, Ts, _, _ = calculate_depth_limited(Ua, equivalent_fetch_m, depth)
 
-        # --- Heuristic for Duration-Limited Hs (Finite Depth) ---
-        # Updated Depth Coefficient: 0.530 -> 0.6 (Hurdle & Stive Eq 4.1)
-        # Updated Leading Coefficient: 0.283 -> 0.25
-        term_h_duration = 0.000528 * (dim_duration)**0.75
-        tanh_depth_h = math.tanh(0.6 * (dim_depth)**0.75) 
-        Hs = (wind_speed_adjusted**2 / gravity) * 0.25 * tanh_depth_h * math.tanh(term_h_duration / tanh_depth_h)
+    # Return calculated values, setting t_min to the input duration for this branch
+    return Hs, Ts, duration_hours, equivalent_fetch_km
 
-        # --- Heuristic for Duration-Limited Ts (Finite Depth) ---
-        # Updated Depth Coefficient: 0.833 -> 0.76 (Hurdle & Stive Eq 4.2)
-        # Updated Leading Coefficient: 7.54 -> 8.3
-        term_t_duration = 0.00379 * (dim_duration)**0.41
-        tanh_depth_t = math.tanh(0.76 * (dim_depth)**0.375)
-        Ts = (wind_speed_adjusted / gravity) * 8.3 * tanh_depth_t * math.tanh(term_t_duration / tanh_depth_t)
+# =============================================================================
+#  SECTION 2: REPORTING & UTILITIES
+# =============================================================================
 
-        # --- Equivalent Fetch Calculation (Finite Depth) ---
-        # Simplified mapping based on the updated coefficients
-        # 0.000528 * t_hat^0.75 ~ 4.3e-5 * F_hat (Approximation of the inner arguments)
-        dim_fetch_equivalent = (0.000528 / 4.3e-5) * (dim_duration**0.75)
-        equivalent_fetch_m = dim_fetch_equivalent * (wind_speed_adjusted**2 / gravity)
-        equivalent_fetch_km = equivalent_fetch_m / 1000
-
-    return Hs, Ts, equivalent_fetch_km
-
-def main():
-    """
-    Main function to drive the user interaction, calculations, and display results.
-    """
-    # Open the report file in write mode
-    with open("report.txt", "w") as report_file:
-        # Store original stdout
-        original_stdout = sys.stdout
-        # Redirect stdout to both the file and the console
-        sys.stdout = Tee(sys.stdout, report_file)
-
-        while True: # Loop for consecutive calculations
-            print()
-            print("======================================================")
-            print("  Sverdrup-Munk-Bretschneider (SMB) Wave Calculator")
-            print("  Revised Model (Hurdle & Stive, 1989)")
-            print("======================================================")
-
-            # --- Get User Inputs for Wind Speed (U10) ---
-            while True:
-                try:
-                    print()
-                    U10 = float(input("Enter wind speed at 10m height (U10) (m/s): "))
-                    if U10 <= 0:
-                        print("Wind speed (U10) must be a positive value.")
-                    else:
-                        break # Exit loop if input is a valid positive number.
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for wind speed (U10).")
-
-            # --- Calculate Adjusted Wind Speed (Ua) ---
-            Ua = calculate_adjusted_wind_speed(U10)
-            print(f"Calculated Adjusted Wind Speed (Ua): {Ua:.2f} m/s")
-
-            # --- Get User Inputs for Fetch and Duration ---
-            # We will collect both fetch and duration to allow for comprehensive comparison.
-            
-            # Get Fetch Input
-            while True:
-                try:
-                    fetch_km = float(input("Enter fetch length (km): "))
-                    if fetch_km <= 0:
-                        print("Fetch length must be a positive value.")
-                    else:
-                        fetch_m = fetch_km * 1000  # Convert fetch from km to meters
-                        break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for fetch.")
-
-            # Get Duration Input
-            while True:
-                try:
-                    duration_str = input("Enter storm duration (hours), or leave blank for infinite duration: ").strip()
-                    if duration_str == "":
-                        duration_input_hours = float('inf') # Set to infinity if blank
-                        break
-                    duration_input_hours = float(duration_str)
-                    if duration_input_hours <= 0:
-                        print("Storm duration must be a positive value or left blank.")
-                    else:
-                        break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for duration or leave blank.")
-
-            # Get Depth Input (optional)
-            while True:
-                depth_str = input("Enter water depth (m) for finite depth, or leave blank for deep water: ").strip()
-                if depth_str == "":
-                    depth_input = None
-                    break
-                try:
-                    depth_input = float(depth_str)
-                    if depth_input < 0:
-                        print("Depth cannot be negative. Please enter a positive value or leave blank.")
-                    else:
-                        break
-                except ValueError:
-                    print("Invalid input. Please enter a numeric value for depth or leave blank.")
-
-            # --- Calculate for Fetch-Limited Scenario (based on input fetch) ---
-            if depth_input is None:
-                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_deep_water(Ua, fetch_m)
-            else:
-                hs_fetch_potential, ts_fetch_potential, t_min_fetch_potential = calculate_depth_limited(Ua, fetch_m, depth_input)
-            
-            # --- Calculate for Duration-Limited Scenario (based on input duration) ---
-            hs_duration_potential, ts_duration_potential, equivalent_fetch_duration_potential = calculate_duration_limited(Ua, duration_input_hours, depth_input)
-
-            # --- Determine the Controlling Condition and Final Results ---
-            # The actual wave height is the minimum of what fetch and duration allow.
-            
-            # First, determine the actual controlling Hs and Ts by taking the minimum of the two potentials
-            # This ensures Hs never decreases with increased duration or fetch.
-            if hs_fetch_potential <= hs_duration_potential:
-                controlling_hs = hs_fetch_potential
-                controlling_period = ts_fetch_potential
-            else:
-                controlling_hs = hs_duration_potential
-                controlling_period = ts_duration_potential
-
-            # Now, determine the controlling factor message and relevant values based on the physical constraints
-            # This logic determines *why* the wave is limited (fetch or duration)
-            if duration_input_hours < t_min_fetch_potential:
-                # If the actual storm duration is less than the minimum required for the given fetch,
-                # then duration is the primary physical limiting factor.
-                controlling_factor_message = "Duration-Limited"
-                relevant_duration_value = duration_input_hours
-                relevant_duration_message = "Given Storm Duration"
-                relevant_fetch_value = equivalent_fetch_duration_potential
-                relevant_fetch_message = "Equivalent Fetch for Given Duration"
-            else:
-                # If the actual storm duration is greater than or equal to the minimum required,
-                # then fetch is the primary physical limiting factor (or duration is sufficient).
-                controlling_factor_message = "Fetch-Limited"
-                relevant_duration_value = t_min_fetch_potential
-                relevant_duration_message = "Minimum Duration for Given Fetch"
-                relevant_fetch_value = fetch_km
-                relevant_fetch_message = "Given Fetch"
-
-            # --- Display Final Results ---
-            print("\n------------------ RESULTS ------------------")
-            print(f"Controlling Wave Growth Factor:     {controlling_factor_message}")
-            print(f"Predicted Significant Wave Height (Hs): {controlling_hs:.2f} meters")
-            print(f"Predicted Significant Wave Period (Ts): {controlling_period:.2f} seconds")
-            
-            if not math.isinf(relevant_duration_value) and not math.isnan(relevant_duration_value):
-                print(f"{relevant_duration_message}:      {relevant_duration_value:.2f} hours")
-            elif math.isinf(relevant_duration_value):
-                print(f"{relevant_duration_message}:      Infinite hours (assumed)")
-            
-            if not math.isnan(relevant_fetch_value):
-                print(f"{relevant_fetch_message}:                   {relevant_fetch_value:.2f} kilometers")
-            
-            print("-------------------------------------------")
-
-            # --- Ask user if they want to perform another calculation ---
-            print()
-            another_calculation = input("Do you want to perform another calculation? (yes/no): ").lower()
-            if another_calculation not in ['yes', 'y']:
-                print("Exiting SMB Wave Calculator. Goodbye!")
-                break # Exit the main loop
-        
-        # Restore original stdout
-        sys.stdout = original_stdout
-
-# Helper class to redirect print output to multiple destinations
 class Tee(object):
+    """Helper to redirect output to both console and file."""
     def __init__(self, *files):
         self.files = files
     def write(self, obj):
         for f in self.files:
             f.write(obj)
-            f.flush() # Ensure immediate writing
+            f.flush() 
     def flush(self):
         for f in self.files:
             f.flush()
 
-# This standard Python construct ensures that the `main()` function is called
-# only when this script is executed directly. It prevents the code from running
-# automatically if this script is imported as a module into another script.
+def format_row(label: str, value, unit: str = "", width_lbl: int = 25, width_val: int = 12) -> str:
+    if isinstance(value, float):
+        val_str = f"{value:.4f}" if abs(value) > 1e-9 else "0.00"
+    else:
+        val_str = str(value)
+    
+    return f"  {label:<{width_lbl}} : {val_str:<{width_val}}{unit}"
+
+def run_simulation(U10: float, fetch_km: float, duration_hr: Optional[float], depth_m: Optional[float]):
+    """
+    Orchestrates the physics calculation and prints the detailed report.
+    """
+    # --- 1. Physics Calculations ---
+    Ua = calculate_adjusted_wind_speed(U10)
+    fetch_m = fetch_km * 1000.0
+    
+    is_deep_water = (depth_m is None)
+    is_inf_duration = (duration_hr is None or math.isinf(duration_hr))
+
+    # A. Calculate Potential A: Fetch Limited
+    if is_deep_water:
+        r_fetch = calculate_deep_water(Ua, fetch_m) # (Hs, Ts, t_min, eq_f)
+    else:
+        r_fetch = calculate_depth_limited(Ua, fetch_m, depth_m)
+
+    # B. Calculate Potential B: Duration Limited
+    dur_val = 1e9 if is_inf_duration else duration_hr
+    r_dur = calculate_duration_limited(Ua, dur_val, depth_m)
+
+    # C. Determine Controlling Factor
+    # Comparing Hs to find the limiting state (Minimum of the two potentials)
+    if r_fetch[0] <= r_dur[0]:
+        # Fetch Limited
+        final_Hs, final_Ts, final_t_min, _ = r_fetch
+        control_msg = "FETCH-LIMITED"
+        
+        relevant_dur_val = final_t_min
+        relevant_dur_label = "Min Duration Req."
+        relevant_fetch_val = fetch_km
+        relevant_fetch_label = "Given Fetch"
+    else:
+        # Duration Limited
+        final_Hs, final_Ts, _, final_eq_fetch = r_dur
+        control_msg = "DURATION-LIMITED"
+        
+        relevant_dur_val = duration_hr if not is_inf_duration else "Infinite"
+        relevant_dur_label = "Given Duration"
+        relevant_fetch_val = final_eq_fetch
+        relevant_fetch_label = "Equivalent Fetch"
+
+    # D. Precise Hydrodynamics (Dispersion & Celerity)
+    # This section replicates the "SMBEngine::solve_dispersion" logic
+    if is_deep_water:
+        # Deep water analytic: L0 = gT^2 / 2pi
+        L = (G_STD * final_Ts**2) / (2 * PI)
+        k = 2 * PI / L
+        kh = 100.0 # Effectively infinite
+        d_actual = 1e9
+    else:
+        d_actual = depth_m
+        kh = solve_dispersion(final_Ts, d_actual)
+        k = kh / d_actual
+        L = 2 * PI / k
+        
+    C = L / final_Ts # Celerity
+
+    # --- 2. Report Generation ---
+    
+    print("============================================================")
+    print("  SMB WAVE PREDICTION REPORT")
+    print("============================================================")
+    print("  Methodology: Revised SMB")
+    print("  Ref: Hurdle & Stive (1989) Unified Formulations")
+    
+    print("\n------------------------------------------------------------")
+    print("  1. INPUT PARAMETERS")
+    print("------------------------------------------------------------")
+    print(format_row("Wind Speed (U10)", U10, "m/s"))
+    print(format_row("Adjusted Speed (Ua)", Ua, "m/s"))
+    print(format_row("Fetch Length (F)", fetch_km, "km"))
+    
+    if is_inf_duration:
+        print(format_row("Storm Duration (t_act)", "Infinite", "hours"))
+    else:
+        print(format_row("Storm Duration (t_act)", duration_hr, "hours"))
+        
+    if is_deep_water:
+        print(format_row("Water Depth (d)", "Deep Water", "-"))
+    else:
+        print(format_row("Water Depth (d)", depth_m, "m"))
+
+    print("\n------------------------------------------------------------")
+    print("  2. LIMITING CONDITIONS")
+    print("------------------------------------------------------------")
+    print(format_row(">> Controlling Factor", control_msg))
+    print("  >> Determining Parameters:")
+    
+    print(format_row("   " + relevant_dur_label, relevant_dur_val, "hours"))
+    print(format_row("   " + relevant_fetch_label, relevant_fetch_val, "km"))
+
+    print("\n------------------------------------------------------------")
+    print("  3. PREDICTION RESULTS")
+    print("------------------------------------------------------------")
+    print(format_row("Sig. Wave Height (Hs)", final_Hs, "m"))
+    print(format_row("Sig. Wave Period (Ts)", final_Ts, "s"))
+    print(format_row("Wave Celerity (C)", C, "m/s"))
+    print(format_row("Wave Length (L)", L, "m"))
+    print(format_row("Wave Number (k)", k, "rad/m"))
+
+    print("\n------------------------------------------------------------")
+    print("  4. INSIGHTS & OBSERVATIONS")
+    print("------------------------------------------------------------")
+    
+    # Insight A: Growth State
+    if control_msg == "FETCH-LIMITED":
+        print("  >> State: Fully Developed for Fetch.")
+        print("     Waves have reached maximum size for this distance.")
+    else:
+        print("  >> State: Growing Sea State (Duration Limited).")
+        print("     Waves are still growing over time.")
+
+    # Insight B: Regime & Stability
+    if is_deep_water:
+        regime = "Deep Water (d/L > 0.5)"
+    else:
+        d_L = d_actual / L
+        if d_L >= 0.5: regime = "Deep Water (d/L > 0.5)"
+        elif d_L < 0.05: regime = "Shallow Water (d/L < 0.05)"
+        else: regime = "Transitional/Intermediate"
+    
+    print(format_row(">> Flow Regime", regime))
+
+    # Breaking (Miche Criterion)
+    # H_max / L = 0.142 * tanh(kd)
+    steepness = final_Hs / L
+    limit_steepness = 0.142 * math.tanh(kh)
+    
+    print(format_row("   Calculated Steepness", steepness, "-"))
+    print(format_row("   Miche Limit (H/L)", limit_steepness, "-"))
+    
+    if steepness > limit_steepness:
+        print(format_row(">> Breaking Status", "UNSTABLE / BREAKING [!]", ""))
+        print("     Wave height exceeds the Miche stability limit.")
+    else:
+        print(format_row(">> Breaking Status", "STABLE", ""))
+        safety_margin = (1.0 - steepness/limit_steepness) * 100.0
+        print(format_row("   Stability Margin", safety_margin, "%"))
+
+    if not is_deep_water:
+        ratio = final_Hs / d_actual
+        print(format_row("   Depth Ratio (Hs/d)", ratio, "-"))
+
+    print("\n------------------------------------------------------------")
+    print("  5. SCENARIO ANALYSIS")
+    print("------------------------------------------------------------")
+    print("  [A] Fetch-Limited Potential")
+    print(format_row("    - Potential Hs", r_fetch[0], "m"))
+    print(format_row("    - Potential Ts", r_fetch[1], "s"))
+    print(format_row("    - Time to Develop", r_fetch[2], "hours"))
+    
+    print()
+    print("  [B] Duration-Limited Potential")
+    if is_inf_duration:
+        print("      - Not applicable (Duration is infinite)")
+    else:
+        print(format_row("    - Potential Hs", r_dur[0], "m"))
+        print(format_row("    - Potential Ts", r_dur[1], "s"))
+        print(format_row("    - Equiv. Fetch", r_dur[3], "km"))
+    print()
+
+def main():
+    """
+    Main entry point handling user input and single execution.
+    """
+    # --- 1. CLI Header & Input Phase (Console Only) ---
+    print("======================================================")
+    print("  SMB WAVE PREDICTION (CLI VERSION)")
+    print("======================================================")
+
+    try:
+        # 1. Wind Speed
+        while True:
+            u_str = input("Enter Wind Speed (U10) [m/s]: ").strip()
+            if u_str: 
+                u10 = float(u_str)
+                if u10 > 0: break
+            print(">> Error: Wind speed must be > 0.")
+
+        # 2. Fetch
+        while True:
+            f_str = input("Enter Fetch Length (F) [km]:  ").strip()
+            if f_str:
+                fetch = float(f_str)
+                if fetch > 0: break
+            print(">> Error: Fetch must be > 0.")
+
+        # 3. Duration
+        d_str = input("Enter Duration (hours) [Blank=Inf]: ").strip()
+        duration = float(d_str) if d_str else None
+        if duration is not None and duration <= 0:
+            print(">> Note: Negative/Zero duration treated as infinite.")
+            duration = None
+
+        # 4. Depth
+        while True:
+            dp_str = input("Enter Depth (meters) [Blank=Deep]:  ").strip()
+            if not dp_str:
+                depth = None
+                break
+            try:
+                depth = float(dp_str)
+                if depth > 0: break
+                print(">> Error: Depth must be > 0.")
+            except ValueError:
+                print(">> Error: Please enter a valid number.")
+
+    except ValueError:
+        print("\n>> Input Error: Please enter valid numeric values.")
+        return
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user.")
+        return
+
+    # --- 2. Execution & Reporting Phase (Console + File) ---
+    with open("report.txt", "w") as report_file:
+        original_stdout = sys.stdout
+        try:
+            sys.stdout = Tee(original_stdout, report_file)
+            run_simulation(u10, fetch, duration, depth)
+        finally:
+            sys.stdout = original_stdout
+
 if __name__ == "__main__":
     main()

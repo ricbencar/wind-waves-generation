@@ -1,55 +1,54 @@
-
 ============================================================
   SMB WAVE PREDICTION REPORT
 ============================================================
+  Methodology: Revised SMB
+  Ref: Hurdle & Stive (1989) Unified Formulations
 
 ------------------------------------------------------------
   1. INPUT PARAMETERS
 ------------------------------------------------------------
-  Wind Speed (U10)          : 30.0000     m/s     
-  Adjusted Speed (Ua)       : 46.5712     m/s     
-  Fetch Length              : 14.0000     km      
-  Storm Duration            : Infinite    hours   
-  Water Depth               : 14.0000     m       
+  Wind Speed (U10)          : 25.0000     m/s     
+  Adjusted Speed (Ua)       : 37.2156     m/s     
+  Fetch Length (F)          : 45.0000     km      
+  Storm Duration (t_act)    : Infinite    hours   
+  Water Depth (d)           : 10.0000     m       
 
 ------------------------------------------------------------
   2. LIMITING CONDITIONS
 ------------------------------------------------------------
-  Controlling Factor        : FETCH-LIMITED        
-
-  Determining Parameters:
-  Min Duration Req.         : 0.8847      hours   
-  Given Fetch               : 14.0000     km      
+  >> Controlling Factor     : FETCH-LIMITED        
+  >> Determining Parameters:
+     Min Duration Req.      : 3.2407      hours   
+     Given Fetch            : 45.0000     km      
 
 ------------------------------------------------------------
   3. PREDICTION RESULTS
 ------------------------------------------------------------
-  Sig. Wave Height (Hs)     : 2.7828      m       
-  Sig. Wave Period (Ts)     : 5.4048      s       
-  Wave Celerity (C)         : 8.1329      m/s     
-  Wave Length (L)           : 43.9564     m       
-  Wave Number (k)           : 0.1429      rad/m   
+  Sig. Wave Height (Hs)     : 2.8516      m       
+  Sig. Wave Period (Ts)     : 7.1223      s       
+  Wave Celerity (C)         : 8.5897      m/s     
+  Wave Length (L)           : 61.1782     m       
+  Wave Number (k)           : 0.1027      rad/m   
 
 ------------------------------------------------------------
   4. INSIGHTS & OBSERVATIONS
 ------------------------------------------------------------
-  >> STATE: Fully Developed for Fetch.
+  >> State: Fully Developed for Fetch.
      Waves have reached maximum size for this distance.
-
   >> Flow Regime            : Transitional/Intermediate        
-     Calculated Steepness   : 0.0633      -       
-     Miche Limit (H/L)      : 0.1369      -       
-     >> BREAKING STATUS     : STABLE              
-        Stability Margin    : 53.7577     %       
-     Depth Ratio (Hs/d)     : 0.1988      -       
+     Calculated Steepness   : 0.0466      -       
+     Miche Limit (H/L)      : 0.1097      -       
+  >> Breaking Status        : STABLE              
+     Stability Margin       : 57.5200     %       
+     Depth Ratio (Hs/d)     : 0.2852      -       
 
 ------------------------------------------------------------
   5. SCENARIO ANALYSIS
 ------------------------------------------------------------
   [A] Fetch-Limited Potential
-      - Potential Hs        : 2.7828      m       
-      - Potential Ts        : 5.4048      s       
-      - Time to Develop     : 0.8847      hours   
+      - Potential Hs        : 2.8516      m       
+      - Potential Ts        : 7.1223      s       
+      - Time to Develop     : 3.2407      hours   
 
   [B] Duration-Limited Potential
       - Not applicable (Duration is infinite)
