@@ -141,9 +141,6 @@
  * - Validates the SMB equations against modern methods.
  */
 
-#define _USE_MATH_DEFINES 
-#define NOMINMAX
-
 #include <windows.h>
 #include <commctrl.h>
 #include <string>
