@@ -2,11 +2,13 @@
  * ==============================================================================
  * SMB WAVE PREDICTION CALCULATOR & GUI
  * ==============================================================================
- * MODULE:   calculator_gui.cpp
- * TYPE:     Empirical Wave Prediction Tool (Win32 GUI)
- * METHOD:   Sverdrup-Munk-Bretschneider (SMB) + Exact Linear Dispersion
- * REF:      U.S. Army Coastal Engineering Manual (CEM) & Shore Protection Manual (SPM)
- * LICENSE:  MIT / Academic Open Source
+ * MODULE:      calculator_gui.cpp
+ * TYPE:        Empirical Wave Prediction Tool (Win32 GUI)
+ * METHOD:      Revised Sverdrup-Munk-Bretschneider (SMB)
+ * STANDARDS:   U.S. Army Coastal Engineering Manual (CEM)
+ *              Shore Protection Manual (SPM 1984)
+ *              Hurdle & Stive (1989) Unified Formulations
+ * LICENSE:     MIT / Academic Open Source
  * ==============================================================================
  *
  * ------------------------------------------------------------------------------
@@ -56,11 +58,16 @@
  * Note: In Deep Water (d_hat -> inf), the depth terms tanh(K_d) approach 1.0.
  *
  * 1.5 WAVE GROWTH EQUATIONS (DURATION-LIMITED)
- * When the storm duration (t) is the limiting factor, the equations are adapted
- * with the updated coefficients (0.25 and 8.3) to ensure asymptotic consistency.
+ * When the storm duration (t) is the limiting factor, the software utilizes the
+ * "Effective Fetch" method (Hurdle & Stive, 1989, Eq 4.13) to ensure kinematic
+ * consistency with the fetch-limited curves.
  *
- * (g * Hs) / Ua^2 = 0.25 * tanh[ 0.000528 * (t_hat)^0.75 ]
- * (g * Ts) / Ua   = 8.30 * tanh[ 0.003790 * (t_hat)^0.41 ]
+ * Algorithm:
+ * 1. Calculate Dimensionless Duration: t_hat = (g * t) / Ua
+ * 2. Invert the minimum duration power law to find Effective Fetch (F_eff):
+ * F_hat_eff = (t_hat / 65.9)^(1.5)
+ * 3. Substitute F_hat_eff into the standard Fetch-Limited equations (1.4) to
+ * solve for Hs and Ts.
  *
  * 1.6 EXACT WAVE KINEMATICS (DISPERSION RELATION)
  * To convert the Period (Ts) into Wavelength (L), we solve the Linear Dispersion
@@ -179,7 +186,7 @@ class StringLogger {
 public:
     // Prints a major section header with double borders
     void print_header(const String& title) {
-        buffer << "\n" << std::string(line_len, '=') << "\n";
+        buffer << std::string(line_len, '=') << "\n";
         buffer << "  " << title << "\n";
         buffer << std::string(line_len, '=') << "\n";
     }
@@ -270,13 +277,12 @@ public:
         Real gTs_U = 8.3 * std::pow(std::tanh(term_fetch_t), 1.0/3.0);
         Real Ts = gTs_U * (Ua / Phys::G_STD);
 
-        // Minimum Duration (t_min)
-        // Solved via approximation from Etemad-Shahidi et al. (2009)
-        Real log_dim_fetch = std::log(dim_fetch);
-        Real A = 0.0161, B = 0.3692, C = 2.2024, D = 0.8798;
-        Real exponent_term = std::pow(A * std::pow(log_dim_fetch, 2) - B * log_dim_fetch + C, 0.5) + D * log_dim_fetch;
-        Real gt_min_U = 6.5882 * std::exp(exponent_term);
-        Real t_min_hr = (gt_min_U * Ua / Phys::G_STD) / 3600.0;
+        // Minimum Duration (t_min) - REVISED (Hurdle & Stive, 1989, Eq 4.12)
+        // The paper explicitly recommends using this simple power law in all cases
+        // to maintain consistency with the effective fetch inversion.
+        // Formula: t_hat = 65.9 * F_hat^(2/3)
+        Real dim_duration = 65.9 * std::pow(dim_fetch, 2.0/3.0);
+        Real t_min_hr = (dim_duration * Ua / Phys::G_STD) / 3600.0;
 
         return {Hs, Ts, t_min_hr, 0.0};
     }
@@ -296,6 +302,9 @@ public:
         // Revised Significant Wave Height (Hs) - Hurdle & Stive (1989) Eq 4.1
         // Depth-damping: K_d1 = tanh(0.6 * d_hat^0.75)
         Real depth_term_h = std::tanh(0.6 * std::pow(dim_depth, 0.75));
+        // Protection against division by zero if depth is extremely small
+        if (depth_term_h < 1e-6) depth_term_h = 1e-6;
+
         Real fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h * depth_term_h);
         
         Real gHs_U2 = 0.25 * depth_term_h * std::pow(std::tanh(fetch_term_inner_h), 0.5);
@@ -304,25 +313,28 @@ public:
         // Revised Significant Wave Period (Ts) - Hurdle & Stive (1989) Eq 4.2
         // Depth-damping: K_d2 = tanh(0.76 * d_hat^0.375)
         Real depth_term_t = std::tanh(0.76 * std::pow(dim_depth, 0.375));
+        if (depth_term_t < 1e-6) depth_term_t = 1e-6;
+
         Real fetch_term_inner_t = (4.1e-5 * dim_fetch) / std::pow(depth_term_t, 3.0);
         
         Real gTs_U = 8.3 * depth_term_t * std::pow(std::tanh(fetch_term_inner_t), 1.0/3.0);
         Real Ts = gTs_U * (Ua / Phys::G_STD);
 
-        // Minimum Duration (t_min) - Etemad-Shahidi et al. (2009)
-        Real log_dim_fetch = std::log(dim_fetch);
-        Real A = 0.0161, B = 0.3692, C = 2.2024, D = 0.8798;
-        Real exponent_term = std::pow(A * std::pow(log_dim_fetch, 2) - B * log_dim_fetch + C, 0.5) + D * log_dim_fetch;
-        Real gt_min_U = 6.5882 * std::exp(exponent_term);
-        Real t_min_hr = (gt_min_U * Ua / Phys::G_STD) / 3600.0;
+        // Minimum Duration (t_min) - REVISED (Hurdle & Stive, 1989, Eq 4.12)
+        // Ref: PDF Section 4.4 recommends using the deep water expression (Eq 3.15/4.12)
+        // for limiting duration in all circumstances.
+        Real dim_duration = 65.9 * std::pow(dim_fetch, 2.0/3.0);
+        Real t_min_hr = (dim_duration * Ua / Phys::G_STD) / 3600.0;
 
         return {Hs, Ts, t_min_hr, 0.0};
     }
 
     /**
      * Calculates Duration-Limited parameters.
-     * Uses CEM/SPM formulations adapted with Hurdle & Stive coefficients
-     * to ensure asymptotic consistency.
+     * Uses the "Effective Fetch" method (Hurdle & Stive, 1989, Eq 4.13).
+     * * Method:
+     * 1. Invert the duration formula (Eq 4.12) to find Effective Fetch.
+     * 2. Plug Effective Fetch into standard Fetch-Limited equations.
      *
      * @param Ua: Adjusted wind speed [m/s]
      * @param dur_hr: Storm duration [hours]
@@ -330,56 +342,32 @@ public:
      * @param is_deep: Flag for deep water regime
      */
     static SMBResult calculate_duration_limited(Real Ua, Real dur_hr, Real depth, bool is_deep) {
+        // 1. Calculate Dimensionless Duration
         Real dur_sec = dur_hr * 3600.0;
         Real dim_dur = (Phys::G_STD * dur_sec) / Ua;
-        Real Hs, Ts, equiv_fetch_m;
 
+        // 2. Calculate Effective Fetch (Eq 4.13)
+        // Formula: F_hat' = (t_hat / 65.9)^(3/2)
+        Real dim_fetch_eq = std::pow(dim_dur / 65.9, 1.5);
+        
+        // Convert back to meters
+        Real equiv_fetch_m = dim_fetch_eq * (Ua * Ua / Phys::G_STD);
+
+        // 3. Calculate Waves using Effective Fetch
+        SMBResult res;
         if (is_deep) {
-            // Deep Water Duration Limited
-            // Adjusted coefficient: 0.283 -> 0.25 (Hurdle & Stive limit)
-            // (g*Hs)/Ua^2 = 0.25 * tanh[ 0.000528 * t_hat^0.75 ]
-            Real gHs_U2 = 0.25 * std::tanh(0.000528 * std::pow(dim_dur, 0.75));
-            Hs = gHs_U2 * (Ua * Ua / Phys::G_STD);
-
-            // Adjusted coefficient: 7.54 -> 8.3 (Hurdle & Stive limit)
-            Real gTs_U = 8.3 * std::tanh(0.00379 * std::pow(dim_dur, 0.41));
-            Ts = gTs_U * (Ua / Phys::G_STD);
-
-            // Equivalent Fetch: Inverting the Hurdle & Stive Deep Water relationship
-            // Approximation for mapping coefficients
-            Real time_term = 0.000528 * std::pow(dim_dur, 0.75);
-            Real tanh_sq = std::tanh(time_term) * std::tanh(time_term);
-            Real dim_fetch_eq;
-            
-            // Prevent singularity at fully developed state
-            if (time_term > 10.0 || tanh_sq >= 1.0) {
-                dim_fetch_eq = 200000.0; // Large number representing fully developed
-            } else {
-                dim_fetch_eq = std::atanh(tanh_sq) / 4.3e-5;
-            }
-            equiv_fetch_m = dim_fetch_eq * (Ua * Ua / Phys::G_STD);
-
+            res = calculate_deep_water(Ua, equiv_fetch_m);
         } else {
-            // Finite Depth Duration Limited (Heuristic Adaptation)
-            Real dim_depth = (Phys::G_STD * depth) / (Ua * Ua);
-
-            // Coefficient updates: 0.530 -> 0.6, 0.283 -> 0.25
-            Real term_h = 0.000528 * std::pow(dim_dur, 0.75);
-            Real tanh_depth_h = std::tanh(0.6 * std::pow(dim_depth, 0.75));
-            Hs = (Ua * Ua / Phys::G_STD) * 0.25 * tanh_depth_h * std::tanh(term_h / tanh_depth_h);
-
-            // Coefficient updates: 0.833 -> 0.76, 7.54 -> 8.3
-            Real term_t = 0.00379 * std::pow(dim_dur, 0.41);
-            Real tanh_depth_t = std::tanh(0.76 * std::pow(dim_depth, 0.375));
-            Ts = (Ua / Phys::G_STD) * 8.3 * tanh_depth_t * std::tanh(term_t / tanh_depth_t);
-
-            // Equivalent Fetch Calculation (Simplified Mapping)
-            // 0.000528 * t_hat^0.75 ~ 4.3e-5 * F_hat
-            Real dim_fetch_eq = (0.000528 / 4.3e-5) * std::pow(dim_dur, 0.75);
-            equiv_fetch_m = dim_fetch_eq * (Ua * Ua / Phys::G_STD);
+            res = calculate_depth_limited(Ua, equiv_fetch_m, depth);
         }
 
-        return {Hs, Ts, 0.0, equiv_fetch_m / 1000.0};
+        // Update the equivalent fetch field (convert to km) for reporting
+        res.equiv_fetch = equiv_fetch_m / 1000.0;
+        
+        // Ensure t_min reflects the input duration for this logic branch
+        res.t_min = dur_hr; 
+
+        return res;
     }
 
     // --- 3.2 Exact Dispersion Solver (Newton-Raphson) ---
@@ -387,21 +375,17 @@ public:
      * Solves the transcendental Linear Dispersion Relation.
      * Equation: L = (g * T^2 / 2pi) * tanh( 2pi * d / L )
      *
-     * The problem is cast in terms of the dimensionless wavenumber kh = k * d.
-     * Function to zero: f(kh) = (w^2 * d / g) - kh * tanh(kh) = 0
-     *
      * @param T: Wave Period [s]
      * @param d: Water Depth [m]
      * @return kh: The dimensionless wavenumber k*d
      */
     static Real solve_dispersion(Real T, Real d, Real tol=1e-15, int max_iter=100) {
         if (d <= 0) return 0.0;
-        Real omega = 2.0 * Phys::PI / T;       // Angular frequency
-        Real k0 = (omega * omega) / Phys::G_STD; // Deep water wavenumber (approx)
+        Real omega = 2.0 * Phys::PI / T;       
+        Real k0 = (omega * omega) / Phys::G_STD; 
         Real k0h = k0 * d;
 
         // Initial Guess using Carvalho (2006) explicit approximation
-        // This provides a starting point very close to the true root.
         Real kh = k0h;
         if (k0h > 0) {
              kh = k0h / std::tanh(std::pow(6.0/5.0, k0h) * std::sqrt(k0h));
@@ -412,12 +396,11 @@ public:
         // Newton-Raphson Iteration loop
         for (int i = 0; i < max_iter; ++i) {
             Real t_kh = std::tanh(kh);
-            Real f = k0h - kh * t_kh; // Residual
-            
+            Real f = k0h - kh * t_kh; 
             Real sech = 1.0 / std::cosh(kh);
-            Real df = -t_kh - kh * (sech * sech); // Derivative
+            Real df = -t_kh - kh * (sech * sech); 
             
-            if (std::abs(df) < 1e-15) break; // Avoid division by zero
+            if (std::abs(df) < 1e-15) break; 
             
             Real dkh = f / df;
             Real kh_new = kh - dkh;
@@ -454,6 +437,8 @@ struct AppInputs {
 std::string RunSimulation(AppInputs inp) {
     StringLogger log;
     log.print_header("SMB WAVE PREDICTION REPORT");
+    log.print_text("Methodology: Revised SMB");
+    log.print_text("Ref: Hurdle & Stive (1989) Unified Formulations");
 
     // --- 1. Physics Calculations (SMB) ---
     Real Ua = SMBEngine::calculate_adjusted_wind_speed(inp.U10);
@@ -522,27 +507,31 @@ std::string RunSimulation(AppInputs inp) {
     log.print_subheader("1. INPUT PARAMETERS");
     log.print_row("Wind Speed (U10)", inp.U10, "m/s");
     log.print_row("Adjusted Speed (Ua)", Ua, "m/s");
-    log.print_row("Fetch Length", inp.fetch_km, "km");
+    log.print_row("Fetch Length (F)", inp.fetch_km, "km");
     
-    if (inf_duration) log.print_str("Storm Duration", "Infinite", "hours");
-    else log.print_row("Storm Duration", inp.duration_hr, "hours");
+    if (inf_duration) log.print_str("Storm Duration (t_act)", "Infinite", "hours");
+    else log.print_row("Storm Duration (t_act)", inp.duration_hr, "hours");
 
-    if (deep_water) log.print_str("Water Depth", "Deep Water", "-");
-    else log.print_row("Water Depth", inp.depth_m, "m");
+    if (deep_water) log.print_str("Water Depth (d)", "Deep Water", "-");
+    else log.print_row("Water Depth (d)", inp.depth_m, "m");
 
     // CONDITIONS
     log.print_subheader("2. LIMITING CONDITIONS");
-    log.print_str("Controlling Factor", control_msg);
-    log.newline();
-    log.print_text("Determining Parameters:");
+    
+    // Controlling factor
+    log.print_str(">> Controlling Factor", control_msg);
+    
+    log.print_text(">> Determining Parameters:");
+    
+    // Indented parameters
     if (inf_duration && control_msg == "FETCH-LIMITED") {
-        log.print_row(dur_label, rel_dur, "hours");
+        log.print_row("   " + dur_label, rel_dur, "hours");
     } else if (inf_duration) {
-         log.print_str(dur_label, "Infinite", "hours");
+         log.print_str("   " + dur_label, "Infinite", "hours");
     } else {
-        log.print_row(dur_label, rel_dur, "hours");
+        log.print_row("   " + dur_label, rel_dur, "hours");
     }
-    log.print_row(fetch_label, rel_fetch, "km");
+    log.print_row("   " + fetch_label, rel_fetch, "km");
 
     // RESULTS
     log.print_subheader("3. PREDICTION RESULTS");
@@ -557,13 +546,12 @@ std::string RunSimulation(AppInputs inp) {
     
     // Insight A: Growth State
     if (control_msg == "FETCH-LIMITED") {
-        log.print_text(">> STATE: Fully Developed for Fetch.");
+        log.print_text(">> State: Fully Developed for Fetch.");
         log.print_text("   Waves have reached maximum size for this distance.");
     } else {
-        log.print_text(">> STATE: Growing Sea State (Duration Limited).");
+        log.print_text(">> State: Growing Sea State (Duration Limited).");
         log.print_text("   Waves are still growing over time.");
     }
-    log.newline();
 
     // Insight B: Regime & Stability
     String regime;
@@ -584,12 +572,12 @@ std::string RunSimulation(AppInputs inp) {
     log.print_row("   Miche Limit (H/L)", limit_steepness, "-");
     
     if (steepness > limit_steepness) {
-        log.print_str("   >> BREAKING STATUS", "UNSTABLE / BREAKING [!]", "");
-        log.print_text("      Wave height exceeds the Miche stability limit.");
+        log.print_str(">> Breaking Status", "UNSTABLE / BREAKING [!]", "");
+        log.print_text("   Wave height exceeds the Miche stability limit.");
     } else {
-        log.print_str("   >> BREAKING STATUS", "STABLE", "");
+        log.print_str(">> Breaking Status", "STABLE", "");
         Real safety_margin = (1.0 - steepness/limit_steepness) * 100.0;
-        log.print_row("      Stability Margin", safety_margin, "%");
+        log.print_row("   Stability Margin", safety_margin, "%");
     }
 
     if (!deep_water) {
@@ -644,14 +632,14 @@ void CreateGUI(HWND hwnd) {
     // Fonts
     hUIFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    hMonoFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 
+    hMonoFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 
                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_DONTCARE, L"Consolas");
 
     // Layout Constants
     int y = 40;
     int x_lbl = 20;
     int x_in = 180;
-    int w_in = 130;
+    int w_in = 80;
     int h_ctl = 32;
     int step = 55;
 
@@ -670,21 +658,20 @@ void CreateGUI(HWND hwnd) {
     };
 
     // Labels
-    AddLabel(L"Wind Speed (U10):", y); hEditU10 = AddEdit(IDC_EDIT_U10, L"30.0", y); AddNote(L"m/s", y); y += step;
-    AddLabel(L"Fetch Length:", y);     hEditFetch = AddEdit(IDC_EDIT_FETCH, L"10.0", y); AddNote(L"km", y); y += step;
-    AddLabel(L"Duration:", y);         hEditDur = AddEdit(IDC_EDIT_DUR, L"", y); AddNote(L"hrs", y); y += step;
-    AddLabel(L"Water Depth:", y);      hEditDepth = AddEdit(IDC_EDIT_DEPTH, L"", y); AddNote(L"m", y); y += step;
+    AddLabel(L"Wind Speed (U10):", y); hEditU10 = AddEdit(IDC_EDIT_U10, L"25", y); AddNote(L"m/s", y); y += step;
+    AddLabel(L"Fetch Length (F):", y);     hEditFetch = AddEdit(IDC_EDIT_FETCH, L"45", y); AddNote(L"km", y); y += step;
+    AddLabel(L"Duration (t_act):", y);         hEditDur = AddEdit(IDC_EDIT_DUR, L"", y); AddNote(L"hrs", y); y += step;
+    AddLabel(L"Water Depth (d):", y);      hEditDepth = AddEdit(IDC_EDIT_DEPTH, L"10", y); AddNote(L"m", y); y += step;
 
     // Calculate Button
     y += 20;
     hBtnCalc = CreateWindowW(L"BUTTON", L"CALCULATE", WS_TABSTOP|WS_VISIBLE|WS_CHILD|BS_DEFPUSHBUTTON, 
-                             x_lbl, y, 320, 50, hwnd, (HMENU)IDC_BTN_CALC, NULL, NULL);
+                             x_lbl, y, 260, 50, hwnd, (HMENU)IDC_BTN_CALC, NULL, NULL);
     SendMessageW(hBtnCalc, WM_SETFONT, (WPARAM)hUIFont, TRUE);
 
     // Output Box
-    // Height reduced to 460 to match main window size of 540
     hOutput = CreateWindowW(L"EDIT", L"", WS_CHILD|WS_VISIBLE|WS_BORDER|ES_MULTILINE|ES_AUTOVSCROLL|WS_VSCROLL|ES_READONLY|WS_HSCROLL|ES_AUTOHSCROLL, 
-                            380, 20, 600, 640, hwnd, (HMENU)IDC_OUTPUT, NULL, NULL);
+                            335, 20, 660, 640, hwnd, (HMENU)IDC_OUTPUT, NULL, NULL);
     SendMessageW(hOutput, WM_SETFONT, (WPARAM)hMonoFont, TRUE);
 }
 

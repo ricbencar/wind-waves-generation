@@ -50,30 +50,23 @@ def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
         return 0.0, 0.0, 0.0
 
     # --- Dimensionless Fetch Calculation ---
-    # F_hat = g * F / Ua^2
     dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
-    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
-    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
+    # --- Significant Wave Height (Hs) Calculation ---
     term_fetch_h = 4.3e-5 * dim_fetch
     gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
-    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    # --- Significant Wave Period (Ts) Calculation ---
     term_fetch_t = 4.1e-5 * dim_fetch
     gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
+    # Uses the Hurdle & Stive (1989) power law: t_hat = 65.9 * F_hat^(2/3)
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    
+    t_min_seconds = dim_duration * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours
 
     return Hs, Ts, t_min_hours
@@ -103,35 +96,27 @@ def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
     dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
-    # --- Revised Significant Wave Height (Hs) ---
-    # Hurdle & Stive (1989), Eq 4.1
-    # Coefficient is 0.25 (vs 0.283 in SPM)
-    # Depth term: tanh(0.6 * d_hat^0.75)
-    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
+    # --- Significant Wave Height (Hs) ---
     depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    if depth_term_h < 1e-6: depth_term_h = 1e-6 # Guard against zero division
+
     fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
-    
     gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Revised Significant Wave Period (Ts) ---
-    # Hurdle & Stive (1989), Eq 4.2
-    # Coefficient is 8.3 (vs 7.54 in SPM)
-    # Depth term: tanh(0.76 * d_hat^0.375)
-    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
+    # --- Significant Wave Period (Ts) ---
     depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    if depth_term_t < 1e-6: depth_term_t = 1e-6 # Guard against zero division
+
     fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
-    
     gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
+    # Uses the Hurdle & Stive (1989) power law for consistency.
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    
+    t_min_seconds = dim_duration * wind_speed_adjusted / gravity
     t_min_hours = t_min_seconds / 3600  # Convert to hours
 
     return Hs, Ts, t_min_hours

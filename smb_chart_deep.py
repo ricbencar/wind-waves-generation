@@ -27,54 +27,30 @@ def calculate_adjusted_wind_speed(U10):
 def calculate_deep_water(wind_speed_adjusted, fetch, gravity=9.8066):
     """
     Calculates fetch-limited wave properties in deep water using the Revised SMB method.
-
-    This function uses the deep-water asymptotic limit of the Hurdle & Stive (1989)
-    unified equations. This ensures that deep water calculations are perfectly
-    consistent with depth-limited calculations as depth increases.
-
-    Args:
-        wind_speed_adjusted (float): The adjusted wind speed (Ua) (m/s).
-        fetch (float):      The effective fetch length (m).
-        gravity (float):    The acceleration due to gravity (m/s^2).
-
-    Returns:
-        tuple: A tuple containing:
-            - Hs (float): Predicted significant wave height (m).
-            - Ts (float): Predicted significant wave period (s).
-            - t_min (float): Minimum wind duration for fetch-limited state (hours).
+    Matches C++ 'calculate_deep_water' logic.
     """
+    if wind_speed_adjusted <= 0 or fetch <= 0:
+        return 0, 0, 0
+        
     # --- Dimensionless Fetch Calculation ---
-    # F_hat = g * F / Ua^2
     dim_fetch = (gravity * fetch) / (wind_speed_adjusted**2)
 
-    # --- Significant Wave Height (Hs) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.1: tanh(depth terms) -> 1
-    # Revised Formula: (g * Hs) / Ua^2 = 0.25 * [tanh(4.3e-5 * F_hat)]^0.5
-    # Note: tanh^0.5(x) denotes sqrt(tanh(x))
+    # --- Significant Wave Height (Hs) Calculation ---
     term_fetch_h = 4.3e-5 * dim_fetch
     gHs_U2 = 0.25 * (math.tanh(term_fetch_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Significant Wave Period (Ts) Calculation (Hurdle & Stive, 1989) ---
-    # Deep water limit of Eq 4.2: tanh(depth terms) -> 1
-    # Revised Formula: (g * Ts) / Ua = 8.3 * [tanh(4.1e-5 * F_hat)]^(1/3)
+    # --- Significant Wave Period (Ts) Calculation ---
     term_fetch_t = 4.1e-5 * dim_fetch
     gTs_U = 8.3 * (math.tanh(term_fetch_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # This complex empirical formula calculates the minimum time required for a
-    # given wind speed and fetch to generate a fully fetch-limited sea. If the
-    # actual storm duration is less than this value, the sea state would be
-    # considered duration-limited.
-    # Ref: Etemad-Shahidi et al. (2009), based on SPM data.
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
-    t_min_hours = t_min_seconds / 3600  # Convert to hours for practical use
-
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    
+    t_min_seconds = dim_duration * wind_speed_adjusted / gravity
+    t_min_hours = t_min_seconds / 3600 
+    
     return Hs, Ts, t_min_hours
 
 def generate_combined_chart(min_wind_speed, max_wind_speed, num_wind_steps,
@@ -126,7 +102,7 @@ def generate_combined_chart(min_wind_speed, max_wind_speed, num_wind_steps,
         hs_levels = np.arange(np.floor(Hs_finite_values.min() * 4) / 4, np.ceil(Hs_finite_values.max() * 4) / 4 + 0.25, 0.25)
         hs_contour = plt.contour(U10_grid, F_grid_km, Hs_values,
                                  levels=hs_levels, # Use specified levels
-                                 colors='black', linestyles='solid', linewidths=1.0)
+                                 colors='black', linestyles='solid', linewidths=3.0)
         plt.clabel(hs_contour, inline=True, fontsize=10, fmt='Hs=%.2f') # Increased fontsize, 2 decimal places
     else:
         print("Warning: No finite Hs values to plot. Check input ranges.")
@@ -155,7 +131,7 @@ def generate_combined_chart(min_wind_speed, max_wind_speed, num_wind_steps,
     else:
         print("Warning: No finite t_min values to plot. Check input ranges.")
 
-    plt.title('Combined SMB Wave Parameters: Hs, Ts, and Duration', fontsize=16) # Increased title fontsize
+    plt.title('Combined SMB Wave Parameters (Depth = inf): Hs, Ts, and Duration', fontsize=16) # Increased title fontsize
     plt.xlabel('Wind Speed (U10) (m/s)', fontsize=14)
     plt.ylabel('Fetch (km)', fontsize=14)
 
@@ -171,11 +147,11 @@ if __name__ == "__main__":
     # Define the parameters for the charts
     WIND_SPEED_MIN = 5
     WIND_SPEED_MAX = 35
-    NUM_WIND_STEPS = 50
+    NUM_WIND_STEPS = 1000  # UPDATED: Increased from 50 to 1000
 
     FETCH_KM_MIN = 1
     FETCH_KM_MAX = 50
-    NUM_FETCH_STEPS = 50
+    NUM_FETCH_STEPS = 1000 # UPDATED: Increased from 50 to 1000
 
     generate_combined_chart(WIND_SPEED_MIN, WIND_SPEED_MAX, NUM_WIND_STEPS,
                             FETCH_KM_MIN, FETCH_KM_MAX, NUM_FETCH_STEPS)

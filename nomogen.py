@@ -1,1034 +1,884 @@
 #!/usr/bin/env python3
-
 """
-    nomogen.py
+Nomogen - Numerical Nomogram Generator
+===============================================================================
+A high-performance automated generator for nomograms using numerical relaxation 
+techniques.
 
-    auto generator for nomograms
+Summary
+-------
+This module generates non-standard nomograms by solving a constrained optimization 
+problem. It treats the nomogram scales as elastic threads and relaxes them into a 
+configuration that minimizes alignment error (geometric accuracy) while maintaining 
+smoothness (minimizing internal strain/curvature).
 
-    use numerical techniques to derive a nomogram for a given function
-    generate the pdf with pynomo
+Key Features
+------------
+* **Numerical Relaxation**: Uses a custom cost function combining alignment error 
+    (the determinant of the alignment points) and smoothness constraints (derivatives).
+* **Numba Optimization**: The core cost function and interpolation routines are 
+    JIT-compiled using Numba to achieve C-like performance during the optimization 
+    loop.
+* **Chebyshev Nodes**: Uses Chebyshev spacing for discretization to minimize 
+    Runge's phenomenon (oscillation at the edges of polynomial interpolation).
+* **Barycentric Interpolation**: Implements stable barycentric Lagrange 
+    interpolation for high-precision function approximation across the scales.
 
+Dependencies
+------------
+* numpy: Matrix operations and array handling.
+* scipy: Optimization routines (L-BFGS-B) and interpolation helpers.
+* numba: JIT compilation for performance-critical kernels.
 
-    Copyright (C) 2021-2024  Trevor Blight
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+===============================================================================
 """
-
-# TODO:
-# add error report
-# investigate crooked tic marks at end of scales
-# investigate infinite derivative problem
-
 
 import sys
-import datetime
-
 import math
-import numpy as np
-
-import scipy
-from scipy import interpolate
-
 import functools
+import warnings
+from typing import Dict, Any, Callable, Tuple, List, Optional, Union
+
+import numpy as np
+import scipy.interpolate
+import scipy.optimize
+
+# Check for Numba and import JIT decorators
+try:
+    from numba import njit, prange
+    HAS_NUMBA = True
+except ImportError:
+    print("CRITICAL ERROR: Numba is required for this module.")
+    print("Please install via: pip install numba")
+    sys.exit(1)
 
 
-# relevant only for python >= 3.6
-# pylint: disable=consider-using-f-string
+# =============================================================================
+#  SECTION 1: JIT-Compiled Numerical Kernels
+# =============================================================================
+#  These functions form the computational engine of the generator. They are 
+#  compiled to machine code by Numba for maximum performance during the 
+#  optimization loop.
+# =============================================================================
 
-# pylint: disable=invalid-name
+@njit(cache=True)
+def _get_barycentric_weights(nodes: np.ndarray) -> np.ndarray:
+    """
+    Calculate the weights for the second form of barycentric Lagrange interpolation.
+    
+    Time Complexity: O(N^2)
+    
+    Parameters:
+        nodes (np.ndarray): The x-coordinates of the interpolation nodes.
+        
+    Returns:
+        np.ndarray: Array of weights corresponding to each node.
+    """
+    n = len(nodes)
+    weights = np.ones(n, dtype=np.float64)
+    for j in range(n):
+        for k in range(n):
+            if j != k:
+                weights[j] /= (nodes[j] - nodes[k])
+    return weights
 
 
-# enable logging
-# "trace_init" "trace_circ" "trace_cost" "trace_alignment" "trace_result"
-log = {}
+@njit(cache=True)
+def _barycentric_interp_scalar(x: float, nodes: np.ndarray, weights: np.ndarray, y_vals: np.ndarray) -> float:
+    """
+    Perform barycentric interpolation for a single scalar value x using the 
+    precomputed weights. Handles the singularity where x matches a node exactly.
+    """
+    epsilon = 1e-14
+    # Check for exact node match to avoid division by zero
+    for i in range(len(nodes)):
+        if abs(x - nodes[i]) < epsilon:
+            return y_vals[i]
 
-itNr = 0
-eAcc = eDeru = eDerv = eShape = 0
-old_cost = cost = 0
+    num = 0.0
+    den = 0.0
+    for i in range(len(nodes)):
+        w_curr = weights[i] / (x - nodes[i])
+        num += w_curr * y_vals[i]
+        den += w_curr
+    return num / den
 
+
+@njit(parallel=True, cache=True)
+def _barycentric_interp_grid(grid_flat: np.ndarray, nodes: np.ndarray, weights: np.ndarray, y_vals: np.ndarray) -> np.ndarray:
+    """
+    Perform barycentric interpolation for a flattened array of query points in parallel.
+    
+    Parameters:
+        grid_flat (np.ndarray): Flattened array of x-coordinates to interpolate at.
+        nodes (np.ndarray): The known x-nodes.
+        weights (np.ndarray): Precomputed barycentric weights.
+        y_vals (np.ndarray): The known y-values at the nodes.
+        
+    Returns:
+        np.ndarray: Interpolated values corresponding to grid_flat.
+    """
+    n = len(grid_flat)
+    res = np.empty(n, dtype=np.float64)
+    
+    for k in prange(n):
+        x = grid_flat[k]
+        val = 0.0
+        match_idx = -1
+        
+        # Check for exact node match
+        for i in range(len(nodes)):
+            if abs(x - nodes[i]) < 1e-14:
+                match_idx = i
+                break
+        
+        if match_idx != -1:
+            val = y_vals[match_idx]
+        else:
+            num = 0.0
+            den = 0.0
+            for i in range(len(nodes)):
+                w = weights[i] / (x - nodes[i])
+                num += w * y_vals[i]
+                den += w
+            val = num / den
+        res[k] = val
+    return res
+
+
+@njit(parallel=True, cache=True)
+def _calc_cost_core(
+    lxu: np.ndarray, lyu: np.ndarray, 
+    lxv: np.ndarray, lyv: np.ndarray, 
+    unodes: np.ndarray, vnodes: np.ndarray, 
+    txwa_flat: np.ndarray, tywa_flat: np.ndarray, 
+    dxdwa_flat: np.ndarray, dydwa_flat: np.ndarray,
+    fdxdu: np.ndarray, fdydu: np.ndarray, 
+    fdxdv: np.ndarray, fdydv: np.ndarray,
+    dwdu_flat: np.ndarray, dwdv_flat: np.ndarray,
+    cost_pos_u: np.ndarray, cost_pos_v: np.ndarray,
+    muShape: float, resolution: float, 
+    umax: float, umin: float, vmax: float, vmin: float
+) -> Tuple[float, float, float, float]:
+    """
+    The computationally intensive inner loop of the cost function.
+    
+    Calculates the error accumulators for:
+    1. Alignment Error (Geometric validity): do the 3 points form a line?
+    2. Derivative Error (Smoothness): are the scales changing abruptly?
+    3. Shape Error (Constraint): enforces placement within the paper bounds.
+    
+    This function iterates over the grid of (u, v) pairs.
+    """
+    local_eAcc = 0.0
+    local_eDeru = 0.0
+    local_eDerv = 0.0
+    local_eShape = 0.0
+
+    n_u = len(unodes)
+    n_v = len(vnodes)
+    
+    # Flattened loop for easier parallelization
+    for i in prange(n_u * n_v):
+        # Decode index back to 2D
+        iu = i // n_v
+        iv = i % n_v
+        
+        u = unodes[iu]
+        v = vnodes[iv]
+
+        # Fetch U scale properties at this node
+        txu = lxu[iu]
+        tyu = lyu[iu]
+        dxdu = fdxdu[iu]
+        dydu = fdydu[iu]
+        
+        # Fetch V scale properties at this node
+        txv = lxv[iv]
+        tyv = lyv[iv]
+        dxdv = fdxdv[iv]
+        dydv = fdydv[iv]
+        
+        # Fetch W scale interpolated properties (pre-calculated outside loop)
+        txw = txwa_flat[i]
+        tyw = tywa_flat[i]
+        dxdw = dxdwa_flat[i]
+        dydw = dydwa_flat[i]
+        
+        # --- Alignment Error (eAcc) ---
+        # Calculate distance between U and V points
+        tx = txu - txv
+        ty = tyu - tyv
+        td2 = tx * tx + ty * ty
+        td = math.sqrt(td2)
+        
+        # Collinearity check (determinant form / distance)
+        e0 = (tx * (tyu - tyw) - (txu - txw) * ty) / td
+        
+        if td2 * resolution > 1.0:
+            local_eAcc += e0 * e0
+
+        # --- Derivative/Gradient Error Logic ---
+        tmp = ty * dxdw - tx * dydw
+        tuc = e0 * (tx * dxdu + ty * dydu) / td2
+        tvc = e0 * (tx * dxdv + ty * dydv) / td2
+        
+        # Calculate contribution from dw/du
+        dwdu = dwdu_flat[i]
+        dedu = ((dwdu * tmp + (tyv - tyw) * dxdu - (txv - txw) * dydu)) / td - tuc
+        local_eDeru += dedu * dedu
+
+        # Calculate contribution from dw/dv
+        dwdv = dwdv_flat[i]
+        dedv = ((dwdv * tmp + (tyw - tyu) * dxdv - (txw - txu) * dydv)) / td + tvc
+        local_eDerv += dedv * dedv
+        
+        # --- Shape Error (Scale Positioning Constraints) ---
+        if muShape != 0:
+            t_u = 0.01 * (umax - umin)**2 + u * u
+            uShape = ((dxdu * ty - dydu * tx))**2 * t_u
+            
+            t_v = 0.01 * (vmax - vmin)**2 + v * v
+            vShape = ((dxdv * ty - dydv * tx))**2 * t_v
+            
+            inv_sum = 0.0
+            if uShape > 1e-12: inv_sum += 1.0/uShape
+            if vShape > 1e-12: inv_sum += 1.0/vShape
+            
+            tShape = td2 * inv_sum
+            tShape *= (cost_pos_u[iu] + cost_pos_v[iv])
+            local_eShape += tShape
+
+    return local_eAcc, local_eDeru, local_eDerv, local_eShape
+
+
+# =============================================================================
+#  SECTION 2: Main Nomogen Class
+# =============================================================================
 
 class Nomogen:
     """
-    class Nomogen - numerically determine a nomogram from an equation
-    inputs:
-             func(a,b), return value is middle scale,
-                        a & b are values on left and right scales
-             params     as in Nomographer, but with these additions
-
-                        'npoints' :
-                         a measure of how many points are needed to
-                         define each scale line in the nomogram
-
-                        'muShape' :
-                        set to non-zero so the ends of the outer axes
-                        are not fixed to the corners of the unit square
+    Manages the numerical generation of a nomogram.
+    
+    This class handles the entire lifecycle:
+    1. Parsing configuration and establishing scale transformations.
+    2. Discretizing the domain using Chebyshev nodes.
+    3. Precomputing derivatives.
+    4. Running the Scipy optimization loop.
+    5. Verifying results and injecting the resulting geometry back into parameters.
     """
 
-    def __init__( self, func, main_params ):
+    def __init__(self, func: Callable, main_params: Dict[str, Any]):
+        """
+        Initialize the Nomogram Generator.
 
+        Args:
+            func: The Python function f(u, v) solving for w.
+            main_params: The dictionary configuration (standard PyNomo format).
+        """
+        self.func = func
+        self.main_params = main_params
+        
+        # Optimization state tracking
+        self.iteration_count = 0
+        self.current_cost = 0.0
+        self.old_cost = 0.0
+        self.metrics = {'eAcc': 0.0, 'eDeru': 0.0, 'eDerv': 0.0, 'eShape': 0.0}
 
-        #########################################
-        # first have a look at the inputs
-        #########################################
+        # Main execution pipeline
+        self._validate_and_setup_params()
+        self._initialize_grids()
+        self._precompute_derivatives()
+        self._optimize()
+        self._apply_and_verify_results()
 
-        if main_params['block_params'][0]['block_type'] != 'type_9':
-            sys.exit( '''
-            'type_9' block expected, found '{}'
-            '''.format(main_params['block_params'][0]['block_type']) )
+    # -------------------------------------------------------------------------
+    # Initialization & Validation
+    # -------------------------------------------------------------------------
 
-        # NN = nr Chebyshev nodes for the scales
-        # the nodes have an index in the range 0 .. NN-1
-        if 'pdegree' in main_params:
-            pstr = 'pdegree'
-            NN = main_params['pdegree']
-            print( '''
-            WARNING: parameter 'pdegree' has been renamed 'npoints' to more accurately describe its use.
-            Please update your code.
-            ''')
+    def _validate_and_setup_params(self):
+        """
+        Validates inputs, sets up U/V/W limits, and creates log/linear wrappers
+        for transformation functions.
+        """
+        params = self.main_params
+
+        # Ensure correct block type
+        if params['block_params'][0]['block_type'] != 'type_9':
+            sys.exit(f"'type_9' block expected, found '{params['block_params'][0]['block_type']}'")
+
+        # Setup N (Number of Chebyshev Points)
+        if 'pdegree' in params:
+            self.NN = params['pdegree']
+            print("\nWARNING: 'pdegree' renamed to 'npoints'. Please update your code.")
         else:
-            pstr = 'npoints'
-            if 'npoints' in main_params:
-                NN = main_params['npoints']
-            else:
-                print( "\n'npoints' parameter not provided,", end=' ' )
-                NN = 9
+            self.NN = params.get('npoints', 9)
 
-        if not isinstance(NN, int):
-            print( "\n'{}' parameter must be an integer, found {} - ".format(pstr, type(NN)), end = ' ' )
-            NN = 9
-        else:
-            if NN < 3:
-                sys.exit( "{} must be >= 3 - quitting".format(pstr) )
-        print( "using", NN, "Chebyshev points" )
+        if not isinstance(self.NN, int):
+            print(f"\n'npoints' must be integer, found {type(self.NN)} - ", end=' ')
+            self.NN = 9
+        elif self.NN < 3:
+            sys.exit("npoints must be >= 3")
+        print("Using", self.NN, "Chebyshev points")
 
+        # Shape Parameter (regularization)
+        self.muShape = 1.0e-14 if 'muShape' in params else 0
+        if self.muShape != 0:
+            print('Setting nomogram for best measureability, muShape is', self.muShape)
 
-        if 'muShape' not in main_params:
-            muShape = 0
-        else:
-            muShape = 1.0e-14
-            print( 'setting nomogram for best measureability, muShape is', muShape )
-
-        global itNr
-        itNr = 0
-
-
-        # get the min & max input values
-        # check for sanity
-        # plotted values are log or linear, maybe one day exponential
-        # convert between plotted and user values
-        # if log scale, use log of corresponding variable
-        # define plot * user conversion functions
-
-        params_u = main_params['block_params'][0]['f1_params']
-        umin_user = params_u['u_min']
-        umax_user = params_u['u_max']
+        # --- Configure U Scale ---
+        self.params_u = params['block_params'][0]['f1_params']
+        umin_user, umax_user = self.params_u['u_min'], self.params_u['u_max']
         if umax_user < umin_user:
-            sys.exit("error: umax ({}) is less than umin ({})".format(umax_user, umin_user))
-        if 'scale_type' in params_u and 'log' in params_u['scale_type']:
-            if umin_user <= 0:
-                sys.exit("error: cannot have umin ({}) <= 0 for log scale".format(umin_user))
-            u_user = math.exp
-            u_plot = math.log
-        else:
-            u_user = u_plot = lambda t: t
+            sys.exit(f"error: umax ({umax_user}) < umin ({umin_user})")
 
-        params_v = main_params['block_params'][0]['f3_params']
-        vmin_user = params_v['u_min']
-        vmax_user = params_v['u_max']
+        if 'log' in self.params_u.get('scale_type', ''):
+            if umin_user <= 0: sys.exit(f"error: umin {umin_user} <= 0 for log scale")
+            self.u_user_trans = math.exp
+            self.u_plot_trans = math.log
+        else:
+            self.u_user_trans = lambda t: t
+            self.u_plot_trans = lambda t: t
+
+        # --- Configure V Scale ---
+        self.params_v = params['block_params'][0]['f3_params']
+        vmin_user, vmax_user = self.params_v['u_min'], self.params_v['u_max']
         if vmax_user < vmin_user:
-            sys.exit("error: vmax ({}) is less than vmin ({})".format(vmax_user, vmin_user))
-        if 'scale_type' in params_v and 'log' in params_v['scale_type']:
-            if vmin_user <= 0:
-                sys.exit("error: cannot have vmin ({}) <= 0 for log scale".format(vmin_user))
-            v_user = math.exp
-            v_plot = math.log
+            sys.exit(f"error: vmax ({vmax_user}) < vmin ({vmin_user})")
+
+        if 'log' in self.params_v.get('scale_type', ''):
+            if vmin_user <= 0: sys.exit(f"error: vmin {vmin_user} <= 0 for log scale")
+            self.v_user_trans = math.exp
+            self.v_plot_trans = math.log
         else:
-            v_user = v_plot = lambda t: t
+            self.v_user_trans = lambda t: t
+            self.v_plot_trans = lambda t: t
 
-        params_w = main_params['block_params'][0]['f2_params']
-        wmin = params_w['u_min']
-        wmax = params_w['u_max']
-        # get check the w scale range
-        wval = [ wmin, wmax, func(umin_user, vmin_user), func(umax_user, vmin_user),
-                 func(umin_user, vmax_user), func(umax_user, vmax_user) ]
-        wmin_user = min(wval)
-        wmax_user = max(wval)
-        #print( 'wmin_user is', wmin_user, ', wmax_user is ', wmax_user )
-        if 'scale_type' in params_w and 'log' in params_w['scale_type']:
-            if wmin_user <= 0:
-                sys.exit("error: cannot have wmin ({}) <= 0 for log scale".format(wmin_user))
-            w_user = math.exp
-            w_plot = math.log
+        # --- Configure W Scale (Result) ---
+        self.params_w = params['block_params'][0]['f2_params']
+        wmin_in, wmax_in = self.params_w['u_min'], self.params_w['u_max']
+
+        # Determine actual W range based on U and V corners
+        corners = [self.func(u, v) for u in [umin_user, umax_user] for v in [vmin_user, vmax_user]]
+        wval = [wmin_in, wmax_in] + corners
+        wmin_user, wmax_user = min(wval), max(wval)
+
+        if 'log' in self.params_w.get('scale_type', ''):
+            if wmin_user <= 0: sys.exit(f"error: wmin {wmin_user} <= 0 for log scale")
+            self.w_user_trans = math.exp
+            self.w_plot_trans = math.log
         else:
-            w_user = w_plot = lambda t: t
+            self.w_user_trans = lambda t: t
+            self.w_plot_trans = lambda t: t
 
-        # convert from user to plot values
-        umin = u_plot(umin_user)
-        umax = u_plot(umax_user)
-        vmin = v_plot(vmin_user)
-        vmax = v_plot(vmax_user)
-        wmin = w_plot(wmin_user)
-        wmax = w_plot(wmax_user)
+        # Store Transformed Limits (internal working coordinates)
+        self.umin, self.umax = self.u_plot_trans(umin_user), self.u_plot_trans(umax_user)
+        self.vmin, self.vmax = self.v_plot_trans(vmin_user), self.v_plot_trans(vmax_user)
+        self.wmin, self.wmax = self.w_plot_trans(wmin_user), self.w_plot_trans(wmax_user)
 
-        #######################################
-        # call nomogram function
-        # convert between plotted units and user-defined units
-        # u, v and returned value are plot values,
-        # call func with user-defined values
-        def w(u, v):
-            r = func( u_user(u), v_user(v) )
-            return w_plot(r)
+        # Transformed Function Wrapper
+        def w_func_impl(u, v):
+            """Internal wrapper handling log/linear conversions."""
+            return self.w_plot_trans(self.func(self.u_user_trans(u), self.v_user_trans(v)))
+        self.w_func = w_func_impl
 
-        width = 10 * main_params['paper_width']  # convert cm -> mm
-        height = 10 * main_params['paper_height']
+        # Physical Properties (Resolution used for error thresholds)
+        self.width = 10 * params['paper_width']
+        self.height = 10 * params['paper_height']
+        self.resolution = 10 * 10 * self.width * self.height
 
-        # allow nomogram tolerance == +/- 0.1 mm
-        # this is how many dots 0.1mm square fit into the nomogram area
-        resolution = 10 * 10 * width * height
+    def _initialize_grids(self):
+        """
+        Sets up the Chebyshev grid nodes, barycentric weights, and generates
+        the initial geometric estimates for the scales.
+        """
+        # Chebyshev Grid Generation
+        # Grid clustering near ends reduces oscillation
+        self.chebyGrid = (1 - np.cos(np.linspace(0, math.pi, self.NN))) / 2
+        
+        self.unodes = self.umin + (self.umax - self.umin) * self.chebyGrid
+        self.vnodes = self.vmin + (self.vmax - self.vmin) * self.chebyGrid
+        self.wnodes = self.wmin + (self.wmax - self.wmin) * self.chebyGrid
 
+        # Barycentric Weights (Required for Numba interpolation)
+        self.u_weights = _get_barycentric_weights(self.unodes)
+        self.v_weights = _get_barycentric_weights(self.vnodes)
+        self.w_weights = _get_barycentric_weights(self.wnodes)
 
+        # --- Initial Geometry Estimation ---
+        # We perform a rough layout to give the optimizer a valid starting point.
+        w0, w1 = self.w_func(self.umin, self.vmin), self.w_func(self.umax, self.vmin)
+        w2, w3 = self.w_func(self.umin, self.vmax), self.w_func(self.umax, self.vmax)
 
-        ######################################################
-        #
-        # the nomogram is built inside a unit square
-        # pynomo scales it at the point of output.
-        #
-        #####################################################
-
-
-        #########################################
-        #
-        # initialise the calculations ....
-        #
-        ##########################################
-
-        # grid for NN chebyshev points scaled to the interval [0,1]
-        chebyGrid = (1 - np.cos(np.linspace(0, math.pi, NN)))/2
-        unodes = umin + (umax - umin) * chebyGrid
-        vnodes = vmin + (vmax - vmin) * chebyGrid
-        wnodes = wmin + (wmax - wmin) * chebyGrid
-
-        if "trace_init" in log:
-            print("unodes is ", unodes)
-            print("vnodes is ", vnodes)
-            print("wnodes is ", wnodes)
-
-
-        # the u scale has umax at the top, but which way up are the w & v scales?
-        w0 = w(umin, vmin)
-        w1 = w(umax, vmin)
-        w2 = w(umin, vmax)
-        w3 = w(umax, vmax)
-
-        # w scale is max up (aligned to u scale) iff w1 > w0
-        # v scale is max up (aligned to u scale) iff (w1 > w0) xor (w2 > w0)
-
+        # Determine vertical orientation based on w-values
         if (w1 > w0) == (w2 > w0):
-            # vmax is at the top
-            wB = w0   # bottom of w scale
-            wE = w3   # top of w scale
-            wG = w1   # intersection of TL-BR diagonal and w wsale
-            wH = w2   # intersection of TR-BL diagonal and w wsale
-            yv0 = 0   # y coord of vmin
-            yv2 = 1   # y coord of vmax
+            # vmax is at top
+            wB, wE = w0, w3
+            wG, wH = w1, w2
+            yv0, yv2 = 0, 1
         else:
-            # vmax is at the bottom
-            wB = w2   # bottom of w scale
-            wE = w1   # top of w scale
-            wG = w3   # intersection of TL-BR diagonal and w wsale
-            wH = w0   # intersection of TR-BL diagonal and w wsale
-            yv0 = 1   # y coord of vmin
-            yv2 = 0   # y coord of vmax
+            # vmax is at bottom
+            wB, wE = w2, w1
+            wG, wH = w3, w0
+            yv0, yv2 = 1, 0
 
-        if wE > wB:
-            yw0 = 0   # y coord of wmin
-            yw2 = 1   # y coord of vmax
+        yw0, yw2 = (0, 1) if wE > wB else (1, 0)
+
+        # Initialize Coordinate Arrays (Normalized 0-1)
+        self.xu = np.zeros(self.NN)
+        self.yu = self.chebyGrid.copy()
+        self.xv = np.ones(self.NN)
+        self.yv = yv0 + (yv2 - yv0) * self.chebyGrid
+
+        # Initial W scale estimation
+        if math.isclose(wG, wH):
+            self.xw = np.full(self.NN, 0.5)
+            yw_interp = scipy.interpolate.interp1d([wB, wG, wE], [0, 0.5, 1])
+            self.yw = np.array([yw_interp(w) for w in self.wnodes])
         else:
-            yw0 = 1   # y coord of wmin
-            yw2 = 0   # y coord of vmax
-
-        if "trace_init" in log:
-            print( "wB is ", wB, ", wE is ", wE, ", wG is ", wG, ", wH is ", wH )
-
-
-        ####################################################
-        # the initial condition is a nomogram where
-        # - the u & v scales vary linearly from (0,0) to (0,1) along the
-        #   left and right edges of the unit square
-        # - an initial estimate for the w scale needs to be determined
-
-        xu = np.zeros(NN)
-        yu = chebyGrid
-        xv = np.ones(NN)
-        yv = yv0 + (yv2-yv0)*chebyGrid
-
-        # find an initial position and slope for the xw scale
-        if math.isclose( wG, wH ):
-            # the diagonal index lines meet near the middle of the nomogram
-            # this is a degenerate case, so just use a vertical line
-            xw = np.full(NN, 0.5)
-
-            # yw(w) goes thru (wB,0), (wG,0.5) & (wE,1)
-            # Note: the wX might not be in increasing order (ie wB might be wmax)
-            yw = np.array( [scipy.interpolate.interp1d( [wB, wG, wE], [0, 0.5, 1] )(w) \
-                            for w in wnodes] )
-
-            # check the calcs ...
-            ywB, ywG, ywE = scipy.interpolate.barycentric_interpolate(wnodes, yw, [wB, wG, wE])
-            if "trace_init" in log:
-                print("yw is ", yw)
-                print( 'evaluated wB, wG, wE are ', ywB, ywG, ywE )
-
-            if not math.isclose( ywB, 0.0, abs_tol= 10*sys.float_info.epsilon ):
-                sys.exit( "initial w scale failed for ywB test ({}, expected 0) - quitting".format(ywB) )
-            #if not math.isclose(ywG, 0.5):
-            #    sys.exit("initial y scale failed for ywG test - quitting")
-            if not math.isclose(ywE, 1.0):
-                sys.exit( "initial w scale failed for ywE test ({}, expected 1) - quitting".format(ywB) )
-        else:
-            # we can use a linear estimate
+            # Alpha approximation for crossed scales
             alphaxw = (wE - wG - wH + wB) / (wE - wB) / (wG - wH)
             xwB = (wH - wB) / (wE - wB) - alphaxw * (wH - wB)
             xwE = xwB + alphaxw * (wE - wB)
-            if "trace_init" in log:
-                print("linear initial estimate found")
-                print("xwB is ", xwB, ", xwE is ", xwE)
+            xwB, xwE = np.clip([xwB, xwE], 0, 1)
+            self.xw = xwB + self.chebyGrid * (xwE - xwB)
+            self.yw = yw0 + (yw2 - yw0) * self.chebyGrid
 
-            # clip to unit square
-            if xwE > 1:
-                xwE = 1
-            elif xwE < 0:
-                xwE = 0
-            if xwB > 1:
-                xwB = 1
-            elif xwB < 0:
-                xwB = 0
-
-            xw =  xwB + chebyGrid * (xwE - xwB)
-            yw = yw0 + (yw2-yw0)*chebyGrid
-
-
-        #################################################
-        #
-        # evaluate function at a,
-        # given an array of Chebyshev nodes and function values
-        # a   - perform barycentric interpolation at position a
-        # an  - array of nodes
-        # fan - array of function values at the nodes an
-
-        def evaluate(a, an, fan):
-
-            # special case: a is one of the grid points
-            if a in an:
-                return fan[np.searchsorted(an, a)]
-
-            # apply correction factors
-            # - first and last terms have weight 1/2,
-            # - even terms have opposite sign
-            if len(an) % 2 == 0:
-                sumA = (fan[0]/(a - an[0]) - fan[-1]/(a - an[-1])) / 2
-                sumB = (1/(a - an[0]) - 1/(a - an[-1])) / 2
-            else:
-                sumA = (fan[0] / (a - an[0]) + fan[-1] / (a - an[-1])) / 2
-                sumB = (1 / (a - an[0]) + 1 / (a - an[-1])) / 2
-
-            # barycentric interpolation on a Chebyshev grid ...
-            for tan, tfan in zip(an, fan):
-                t = 1 / (a - tan)
-                sumA = t * tfan - sumA
-                sumB = t - sumB
-            return sumA / sumB
-
-
-        ############################################################
-        #
-        # calculate derivative matrix for a chebyshev grid
-        # see cheb.m in "Spectral Methods in Matlab", Ch 6, by Lloyd N. Trefethen
-        # x: the chebyshev grid
-        # return the derivative matrix
+    def _precompute_derivatives(self):
+        """
+        Calculates differentiation matrices and partial derivatives of W.
+        These are static throughout the optimization.
+        """
+        
         def diffmat(x):
-
+            """Generate differentiation matrix for a set of nodes x."""
             n = len(x)
-
-            # deal with the pathological case
-            if n == 0:
-                return 0
-
-            # replicate the Chebyshev grid onto a nxn matrix
-            XX = np.tile( x, (n,1) )
-
-            # coefficients, alternating 1/-1/..., first & last entries are +/-2
-            c = np.empty((n,1))  # column vector
-            c[::2] = 1            # evens
-            c[1::2] = -1          # odds
-            c[0] = 2; c[-1] *= 2  # first * last
-
-            D = c * (1/c).T  # nxn matrix
-
-            # off diagonal entries
+            if n == 0: return 0
+            XX = np.tile(x, (n, 1))
+            c = np.empty((n, 1))
+            c[::2] = 1
+            c[1::2] = -1
+            c[0] = 2; c[-1] *= 2
+            D = c * (1 / c).T
             dXX = XX.T - XX + np.eye(n)
             D = D / dXX
-
-            # diagonal entries - subtract sum of each row
             for ii in range(n):
                 D[ii][ii] -= D[ii].sum()
-
             return D
 
-
-        #############################################################
-        #
-        # find the derivative of function f at position x
-        # detect range and value errors
-        # x1 & x0 are max * min values of x, used to calculate step size
-        #
-        # formulas taken from Fornberg:
-        # "Generation of Finite Difference Formulas on Arbitrarily Spaced Grids",
-        # Mathematics of Computation, Vol 51, nr 184, Oct 1988, pp 699-706
-
         def derivative(f, x, x1, x0):
+            """Numerical derivative using 4-point stencil."""
             try:
-                h = 1.0e-4*(x1-x0)
-                r = (f(x-2*h) - 8*f(x-h) + 8*f(x+h) - f(x+2*h))/(12*h)
+                h = 1.0e-4 * (x1 - x0)
+                r = (-f(x + 2 * h) + 8 * f(x + h) - 8 * f(x - h) + f(x - 2 * h)) / (12 * h)
                 if math.isnan(r):
-                    # try a one sided derivative (does not work well, commented out)
-                    # assume error is caused by exceding valid domain of f
-                    # magically gives h the correct sign, assuming x is one of {x0, x1}
-                    #h = ((x1+x0) - 2*x)*1e-4
-                    #r = (-25*f(x) + 48*f(x+h) - 36*f(x+2*h) + 16*f(x+3*h) - 3*f(x+4*h))/(12*h)
-                    print( 'derivative nan at x={}, max={}, min={}, result={}'.format(x, x1,x0, r) )
+                    print(f'Derivative NaN at x={x}, result={r}')
             except ValueError:
-                # magically gives h the correct sign, assuming x is one of {x0, x1}
-                #h = ((x1+x0) - 2*x)*1e-4
-                #r = (-25*f(x) + 48*f(x+h) - 36*f(x+2*h) + 16*f(x+3*h) - 3*f(x+4*h))/(12*h)
                 r = math.nan
-                print( 'derivative exception at x={}, max={}, min={}, result={}'.format(x, x1,x0, r) )
+                print(f'Derivative exception at x={x}')
             return r
 
+        # Generate Differentiation Matrices
+        self.diffmatu = diffmat(self.unodes)
+        self.diffmatv = diffmat(self.vnodes)
+        self.diffmatw = diffmat(self.wnodes)
 
-        #############################################################
-        #
-        # these arrays define the x & y coordinates of the scales
-        #
-        baryu = scipy.interpolate.BarycentricInterpolator(unodes)
-        baryv = scipy.interpolate.BarycentricInterpolator(vnodes)
-        baryw = scipy.interpolate.BarycentricInterpolator(wnodes)
+        # Pre-calculate W values grid
+        self.w_values = np.array([[self.w_func(u, v) for v in self.vnodes] for u in self.unodes])
+        self.w_values_flat = self.w_values.ravel()
 
-        w_values = np.array([[w(u, v) for v in vnodes] for u in unodes])  # L141
+        # Partial Derivatives (dw/du, dw/dv) calculation
+        dwdu_values = np.array([[derivative(lambda uu: self.w_func(uu, v), u, self.umax, self.umin) 
+                                 for v in self.vnodes] for u in self.unodes])
+        
+        dwdv_values = np.array([[derivative(lambda vv: self.w_func(u, vv), v, self.vmax, self.vmin) 
+                                 for v in self.vnodes] for u in self.unodes])
 
-        dwdu_values = np.array( [[ derivative(lambda uu: w(uu, v), u, umax, umin ) \
-                                   for v in vnodes] for u in unodes])
+        # Validate derivatives
+        if np.isnan(dwdu_values).any() or np.isnan(dwdv_values).any():
+            sys.exit("\nError: The scales cannot be represented by a finite polynomial in this range.\n"
+                     "Derivatives contain NaNs. Please reduce limits on the scales and try again.")
 
-        dwdv_values = np.array( [[derivative(lambda vv: w(u, vv), v, vmax, vmin ) \
-                                  for v in vnodes] for u in unodes])
+        self.dwdu_flat = dwdu_values.ravel()
+        self.dwdv_flat = dwdv_values.ravel()
+        # Keep 2D versions for verification later
+        self.dwdu_values = dwdu_values
+        self.dwdv_values = dwdv_values
 
-        diffmatu = diffmat( unodes )
-        diffmatv = diffmat( vnodes )
-        diffmatw = diffmat( wnodes )
+    # -------------------------------------------------------------------------
+    # Optimization Loop
+    # -------------------------------------------------------------------------
 
+    def _cost_callback(self, xk):
+        """Callback for Scipy Optimizer to print progress in-place."""
+        self.iteration_count += 1
+        
+        # Shorten filename to first 10 chars (ASCII safe)
+        fname = self.main_params['filename']
+        if len(fname) > 10:
+            fname = fname[:9] + "~"  # Use tilde instead of ellipsis to prevent encoding errors
+            
+        # Compact formatting to prevent line-wrapping
+        msg = (f"\r{fname} "
+               f"It:{self.iteration_count:<4d} "
+               f"Ac:{self.metrics['eAcc']:.1e} "
+               f"dU:{self.metrics['eDeru']:.1e} "
+               f"dV:{self.metrics['eDerv']:.1e}")
+        
+        if self.muShape != 0:
+            msg += f" Sh:{self.metrics['eShape']:.1e}"
+            
+        # Write to stdout and flush immediately
+        sys.stdout.write(msg)
+        sys.stdout.flush()
+        
+        self.old_cost = self.current_cost
 
-        #######################################
-        #
-        # this is the optimisation function
-        #
-        def calc_cost(dummy):
-
-            """
-            find cost of candidate nomogram
-            cost has components, alignment accuracy, slope accuracy and area optimisation
-            - max error in accuracy is < 0.1 mm
-            - must fill size (height x width) as much as possible,
-              so too small or too big are errors
-
-            the accuracy component is comprised of
-            - position error
-            - gradient error
-
-            the size component is optional
-            - depends on muShape being non-zero
-            It calculates a measurability score: a combination of
-            - the scale of the axes
-            - the angle of the index lines
-            There is a cost of exceeding the nomogram boundary
-
-            normalise each error
-            - per point pair, and
-            - per range
-            """
-
-            if muShape != 0:
-                lxu, lyu, lxv, lyv, lxw, lyw =  np.array_split(dummy, 6)  # qqq
-
-                # the cost of straying outside the unit square:
-                # the exp function gets big quickly as the points approach
-                # & exceed the boundaries of the unit square.
-                # apply this function to each point in the u & v axes
-                aa = 40
-                cost_pos_u = np.exp(aa*(-0.3-lxu)) + np.exp(aa*(lxu-1.3)) + \
-                    np.exp(aa*(-0.3-lyu)) + np.exp(aa*(lyu-1.3)) + 1
-                cost_pos_v = np.exp(aa*(-0.3-lxv)) + np.exp(aa*(lxv-1.3)) + \
-                    np.exp(aa*(-0.3-lyv)) + np.exp(aa*(lyv-1.3)) + 1
-
-            else:
-                # the corner coordinates are fixed, so don't use them
-                lxu, lyu, lxv, lyv, lyw = xu, yu, xv, yv, yw
-                lxu[1:-1], lyu[1:-1], lxv[1:-1], lyv[1:-1], lxw, lyw[1:-1] = \
-                np.array_split( dummy, [NN-2, 2*NN-4, 3*NN-6, 4*NN-8, 5*NN-8]) #qqq
-
-            if "trace_cost" in log:
-                print("\ntry")
-                print("lxu is ", lxu)
-                print("lyu is ", lyu)
-                print("lxv is ", lxv)
-                print("lyv is ", lyv)
-                print("lxw is ", lxw)
-                print("lyw is ", lyw)
-                print()
-
-            global eAcc, eDeru, eDerv
-            global eShape
-            eAcc = eDeru = eDerv = eShape = 0
-
-
-            # estimate position & derivative error
-
-            fdxdu = diffmatu @ lxu
-            fdydu = diffmatu @ lyu
-            fdxdv = diffmatv @ lxv
-            fdydv = diffmatv @ lyv
-            fdxdw = diffmatw @ lxw
-            fdydw = diffmatw @ lyw
-
-
-            # precalculate coordinates and derivatives for w outside loop for speedup
-            baryw.set_yi(lxw)
-            txwa = baryw(w_values)
-            baryw.set_yi(lyw)
-            tywa = baryw(w_values)
-            baryw.set_yi(fdxdw)
-            dxdwa = baryw(w_values)
-            baryw.set_yi(fdydw)
-            dydwa = baryw(w_values)
-
-
-            for iu in range(len(unodes)):
-                txu = lxu[iu]
-                tyu = lyu[iu]
-                dxdu = fdxdu[iu]
-                dydu = fdydu[iu]
-
-                u = unodes[iu]
-
-                for iv in range(len(vnodes)):
-                    txv = lxv[iv]
-                    tyv = lyv[iv]
-                    dxdv = fdxdv[iv]
-                    dydv = fdydv[iv]
-
-                    txw = txwa[iu][iv]
-                    tyw = tywa[iu][iv]
-                    dxdw = dxdwa[iu][iv]
-                    dydw = dydwa[iu][iv]
-
-                    v = vnodes[iv]
-                    tx = txu - txv
-                    ty = tyu - tyv
-                    td2 = tx * tx + ty * ty
-                    td = math.sqrt(td2)
-                    e0 = (tx * (tyu - tyw) - (txu - txw) * ty) / td #[d]
-                    if td2 * resolution > 1:
-                        eAcc += e0*e0                               #[d^2]
-
-                    tmp = ty * dxdw - tx * dydw                     #[xy]/[w]
-                    tuc = e0 * (tx * dxdu + ty * dydu) / td2        # [d]/[u]
-                    tvc = e0 * (tx * dxdv + ty * dydv) / td2        # [d]/[v]
-
-
-                    ### these values are predefined for speedup L141
-                    dwdu = dwdu_values[iu][iv]
-                    quitOnNan = True               # bravely carrying on doesn't work well
-                    if not math.isnan(dwdu):
-                        dedu = ((dwdu * tmp + (tyv - tyw) * dxdu - (txv - txw) * dydu)) / td - tuc #[d]/[u] - [d]/[u]
-                        eDeru += dedu ** 2         #[d^2]/[u^2]
-                    elif quitOnNan:
-                        sys.exit( """
-error: the u scale line around the region u = {} cannot be represented by a finite polynomial!
-       please reduce limits on this scale and try again
-                                 """.format(u_user(u)) )
-
-                    dwdv = dwdv_values[iu][iv]
-                    if not math.isnan(dwdv):
-                        dedv = ((dwdv * tmp + (tyw - tyu) * dxdv - (txw - txu) * dydv)) / td + tvc  #[d]/[v] + [d]/[v]
-                        eDerv += dedv ** 2
-                    elif quitOnNan:
-                        sys.exit( """
-error: the v scale line around the region v = {} cannot be represented by a finite polynomial!
-       try again with reduced limits on this scale
-                                 """.format(v_user(v)) )
-
-                    check = True  # checks are slow
-                    check = False
-                    if check:
-                        def gete0(au, av):
-                            xau = evaluate(au, unodes, lxu)
-                            yau = evaluate(au, unodes, lyu)
-                            xav = evaluate(av, vnodes, lxv)
-                            yav = evaluate(av, vnodes, lyv)
-                            tw = w(au, av)
-                            xtw = evaluate(tw, wnodes, lxw)
-                            ytw = evaluate(tw, wnodes, lyw)
-                            return (xau * yav + xtw * (yau - yav) + (xav - xau) * ytw - xav * yau) \
-                                / math.hypot((xau - xav), (yau - yav))
-
-                        if not math.isclose(e0, gete0(u, v), rel_tol=1e-05, abs_tol=1e-7):
-                            sys.exit("gete0() error")
-
-                        aa = v
-                        tu = derivative( lambda uu: gete0(uu, aa), u, umax, umin )
-                        if not math.isclose(tu, dedu, rel_tol=1e-05, abs_tol=1e-7):
-                            print("(u,v) is (", u, ",", v, "), \
-                            dedu is ", dedu, ", tu is ", tu, ", tuc is ", tuc)
-                            sys.exit("dedu error")
-
-                        aa = u
-                        tv = derivative( lambda vv: gete0(aa, vv), v, vmax , vmin )
-                        if not math.isclose(tv, dedv, rel_tol=1e-05, abs_tol=1e-7):
-                            print("(u,v) is (", u, ",", v, "), dedv is ", dedv, ", tv is ", tv)
-                            sys.exit("dedv error")
-
-
-                    # calculate cost of shape
-                    # include cost of position
-                    # u & v axes
-                    # divide by range of u to make eShape independent of u units, etc
-                    if muShape != 0:
-                        t = 0.01*(umax-umin)*(umax-umin) + u*u
-                        uShape = ((dxdu*ty - dydu*tx))**2 * t   #[x^2 y^2 / u^2] * [u^2]
-                        t = 0.01*(vmax-vmin)*(vmax-vmin) + v*v
-                        vShape = ((dxdv*ty - dydv*tx))**2 * t
-                        tShape = td2 * ( 1/uShape + 1/vShape)         # 1/[d^2]
-
-                        tShape *= cost_pos_u[iu] + cost_pos_v[iv]
-                        eShape += tShape
-
-            # make eDeru independent of the scale of u,
-            # so multiply by range of u to cancel units
-            # eDeru has units (xy/u)**2
-            eDeru *= (umax - umin) ** 2                      # [d^2]
-            eDerv *= (vmax - vmin) ** 2                      # [d^2]
-
-            eShape *= muShape
-
-            # mu sets relative priority of eAcc & eDerx
-            # TODO:
-            #       investigate a good value for mu
-            #
-            # there is one error term for each pair of points
-            # so normalise to average error per point pair.
-            mu = 1
-            global cost
-            cost = (eAcc + \
-                    mu * (eDeru + eDerv) + \
-                    eShape) / \
-                    (len(unodes) * len(vnodes))
-            return cost
-
-
-        # run this function whenever the optimise function enters a
-        # new iteration
-        def newStep(xk):
-            global itNr
-            global old_cost
-
-            itNr += 1
-            print("\r", main_params['filename'], " costs: {:3d}".format(itNr), sep="", end="")
-            print(", eAcc {:.2e}".format(eAcc), end='')
-            print(", eDer {:.2e}, {:.2e}".format(eDeru, eDerv), end='')
-            if muShape != 0:
-                print(", eShape {:.2e}".format(eShape), end='')
-            if old_cost != 0 and cost < old_cost:
-                print(", cost improvement is {:2.0f}%".format(100 * (old_cost - cost) / old_cost), end='')
-            old_cost = cost
-
-        #
-        # the nomogram is given by the coordinates of the node points that
-        # minimises the error
-        #
-
-        # prefer BFGS or L-BFGS, then Powell and Nelder-Mead, both gradient-free methods
-        #
-        # scipy.optimize.minimize(fun, x0, args=(), method=None, jac=None, hess=None, hessp=None, bounds=None, constraints=(), tol=None, callback=None, options=None)
-
-        assert len(xu) == NN
-        if muShape != 0:
-            x0 = np.concatenate([xu, yu, xv, yv, xw, yw])  # qqq
+    def _calculate_cost(self, variables_vector):
+        """The Objective Function."""
+        if self.muShape != 0:
+            lxu, lyu, lxv, lyv, lxw, lyw = np.array_split(variables_vector, 6)
+            aa = 40
+            cost_pos_u = np.exp(aa*(-0.3-lxu)) + np.exp(aa*(lxu-1.3)) + \
+                         np.exp(aa*(-0.3-lyu)) + np.exp(aa*(lyu-1.3)) + 1
+            cost_pos_v = np.exp(aa*(-0.3-lxv)) + np.exp(aa*(lxv-1.3)) + \
+                         np.exp(aa*(-0.3-lyv)) + np.exp(aa*(lyv-1.3)) + 1
         else:
-            x0 = np.concatenate([xu[1:-1], yu[1:-1], \
-                                 xv[1:-1], yv[1:-1], \
-                                 xw, yw[1:-1]])  # qqq
+            lxu, lyu, lxv, lyv, lyw = self.xu.copy(), self.yu.copy(), self.xv.copy(), self.yv.copy(), self.yw.copy()
+            lxw = self.xw 
+            idx_splits = [self.NN-2, 2*self.NN-4, 3*self.NN-6, 4*self.NN-8, 5*self.NN-8]
+            parts = np.array_split(variables_vector, idx_splits)
+            lxu[1:-1], lyu[1:-1], lxv[1:-1], lyv[1:-1], lxw, lyw[1:-1] = parts
+            cost_pos_u = np.zeros_like(lxu)
+            cost_pos_v = np.zeros_like(lxv)
 
+        # Spatial Derivatives
+        fdxdu = self.diffmatu @ lxu
+        fdydu = self.diffmatu @ lyu
+        fdxdv = self.diffmatv @ lxv
+        fdydv = self.diffmatv @ lyv
+        fdxdw = self.diffmatw @ lxw
+        fdydw = self.diffmatw @ lyw
 
-        # increase gtol if this terminates due to loss of precision
-        res = scipy.optimize.minimize( calc_cost, x0, callback=newStep,
-                options={'disp': False, 'gtol': 1e-4, 'maxiter': None},
-                tol=1e-4 )
+        # Interpolate W scale properties
+        txwa_flat = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, lxw)
+        tywa_flat = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, lyw)
+        dxdwa_flat = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, fdxdw)
+        dydwa_flat = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, fdydw)
 
+        # Numba Optimized Cost Loop
+        eAcc, eDeru, eDerv, eShape = _calc_cost_core(
+            lxu, lyu, lxv, lyv,
+            self.unodes, self.vnodes,
+            txwa_flat, tywa_flat, dxdwa_flat, dydwa_flat,
+            fdxdu, fdydu, fdxdv, fdydv,
+            self.dwdu_flat, self.dwdv_flat,
+            cost_pos_u, cost_pos_v,
+            self.muShape, self.resolution,
+            self.umax, self.umin, self.vmax, self.vmin
+        )
 
-        ########################################
-        #
-        # check & report results
-        #
-        ########################################
+        eDeru *= (self.umax - self.umin) ** 2
+        eDerv *= (self.vmax - self.vmin) ** 2
+        eShape *= self.muShape
+
+        self.metrics = {'eAcc': eAcc, 'eDeru': eDeru, 'eDerv': eDerv, 'eShape': eShape}
+        
+        mu = 1.0e-3
+        total_cost = (eAcc + mu * (eDeru + eDerv) + eShape) / (len(self.unodes) * len(self.vnodes))
+        
+        self.current_cost = total_cost
+        return total_cost
+
+    def _optimize(self):
+        """
+        Runs the Scipy L-BFGS-B optimizer to minimize the cost function.
+        Updates self.xu, self.yu, etc. with the optimized geometry.
+        """
+        if self.muShape != 0:
+            x0 = np.concatenate([self.xu, self.yu, self.xv, self.yv, self.xw, self.yw])
+        else:
+            # If shape is not optimized, we lock the endpoints of U and V scales
+            # to prevent rigid body rotation drift.
+            x0 = np.concatenate([
+                self.xu[1:-1], self.yu[1:-1], 
+                self.xv[1:-1], self.yv[1:-1], 
+                self.xw, self.yw[1:-1]
+            ])
+
+        # L-BFGS-B Settings
+        # High maxiter/maxfun to ensure deep convergence.
+        # Strict gtol/ftol for precision.
+        res = scipy.optimize.minimize(
+            self._calculate_cost, 
+            x0, 
+            method='L-BFGS-B',
+            callback=self._cost_callback,
+            options={
+                'disp': False, 
+                'gtol': 1e-15, 
+                'ftol': 1e-15, 
+                'maxiter': 500000,
+                'maxfun': 500000
+            }
+        )
 
         print()
-        if "trace_result" in log:
-            print(res)
+        print(f"cost function is {res.fun:.2e}, {res.message}")
+
+        # Unpack results back into coordinate arrays
+        if self.muShape != 0:
+            self.xu, self.yu, self.xv, self.yv, self.xw, self.yw = np.array_split(res.x, 6)
         else:
-            # print( "after ", res.nit, " iterations, ")
-            print("cost function is {:.2e}, ".format(res.fun), res.message, sep='')
+            self.xu[1:-1], self.yu[1:-1], self.xv[1:-1], self.yv[1:-1], self.xw, self.yw[1:-1] = \
+                np.array_split(res.x, [self.NN-2, 2*self.NN-4, 3*self.NN-6, 4*self.NN-8, 5*self.NN-8])
 
-        #        if not ("success" in res.keys()) or res.success:  # xxx res.success crashes for some methods
-        if True or res.success:  # xxx lack of precision still gives a result
-            if muShape != 0:
-                xu, yu, xv, yv, xw, yw = \
-                    np.array_split(res.x, 6)  # qqq
+    # -------------------------------------------------------------------------
+    # Results, Verification, and Injection
+    # -------------------------------------------------------------------------
+
+    def _apply_and_verify_results(self):
+        """
+        Performs post-optimization verification and injects the generated scale 
+        functions back into the main parameters dictionary for plotting.
+        """
+        
+        # --- Part 1: Derivative Error Verification ---
+        self._verify_derivatives()
+
+        # --- Part 2: Dense Geometric Verification ---
+        self._verify_alignment_dense()
+
+        # --- Part 3: Inject Functions into Params ---
+        self._inject_results()
+        
+        # --- Part 4: Auto-configure Ticks ---
+        self._configure_tick_placement()
+
+        # --- Part 5: Handle Dual Scales ---
+        self._configure_dual_scales()
+
+    def _verify_derivatives(self):
+        """Checks consistency between numerical derivatives and geometry."""
+        fdxdu = self.diffmatu @ self.xu
+        fdydu = self.diffmatu @ self.yu
+        fdxdv = self.diffmatv @ self.xv
+        fdydv = self.diffmatv @ self.yv
+        fdxdw = self.diffmatw @ self.xw
+        fdydw = self.diffmatw @ self.yw
+
+        maxerr = 0.0
+
+        # Create temporary grid interpolators
+        xwcoorda = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, self.xw).reshape(self.NN, self.NN)
+        ywcoorda = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, self.yw).reshape(self.NN, self.NN)
+        dxdwa = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, fdxdw).reshape(self.NN, self.NN)
+        dydwa = _barycentric_interp_grid(self.w_values_flat, self.wnodes, self.w_weights, fdydw).reshape(self.NN, self.NN)
+
+        for i in range(len(self.unodes)):
+            xucoord = self.xu[i]
+            yucoord = self.yu[i]
+            dxdu = fdxdu[i]
+            dydu = fdydu[i]
+
+            for j in range(len(self.vnodes)):
+                xvcoord = self.xv[j]
+                yvcoord = self.yv[j]
+                dxdv = fdxdv[j]
+                dydv = fdydv[j]
+                
+                xwcoord = xwcoorda[i, j]
+                ywcoord = ywcoorda[i, j]
+                dxdw = dxdwa[i, j]
+                dydw = dydwa[i, j]
+
+                dwdu = self.dwdu_values[i][j]
+                dwdv = self.dwdv_values[i][j]
+
+                # Cross-product checks
+                # Check 1
+                lhs = dwdu * ((xucoord - xvcoord) * dydw - (yucoord - yvcoord) * dxdw)
+                rhs = (xwcoord - xvcoord) * dydu - (ywcoord - yvcoord) * dxdu
+                t = abs(lhs - rhs) * (self.umax - self.umin)
+                if t > maxerr: maxerr = t
+
+                # Check 2
+                lhs = dwdv * ((xucoord - xvcoord) * dydw - (yucoord - yvcoord) * dxdw)
+                rhs = (xucoord - xwcoord) * dydv - (yucoord - ywcoord) * dxdv
+                t = abs(lhs - rhs) * (self.vmax - self.vmin)
+                if t > maxerr: maxerr = t
+
+                # Check 3
+                lhs = dwdv * ((xwcoord - xvcoord) * dydu - (ywcoord - yvcoord) * dxdu)
+                rhs = dwdu * ((xucoord - xwcoord) * dydv - (yucoord - ywcoord) * dxdv)
+                t = abs(lhs - rhs) * (self.umax - self.umin) * (self.vmax - self.vmin) / (self.wmax - self.wmin)
+                if t > maxerr: maxerr = t
+
+        print("max derivative error is {:.2g}".format(maxerr))
+
+    def _verify_alignment_dense(self):
+        """Checks alignment error on a dense grid (every 1mm)."""
+        d = 1  # check every 1 mm
+        print("checking solution every ", d, "mm, ")
+        ds = d / math.sqrt(self.height * self.width)
+        
+        # Prepare interpolators for derivatives
+        fdxdu = self.diffmatu @ self.xu
+        fdydu = self.diffmatu @ self.yu
+        fdxdv = self.diffmatv @ self.xv
+        fdydv = self.diffmatv @ self.yv
+
+        baryfdxdu = scipy.interpolate.BarycentricInterpolator(self.unodes, fdxdu)
+        baryfdydu = scipy.interpolate.BarycentricInterpolator(self.unodes, fdydu)
+        baryfdxdv = scipy.interpolate.BarycentricInterpolator(self.vnodes, fdxdv)
+        baryfdydv = scipy.interpolate.BarycentricInterpolator(self.vnodes, fdydv)
+
+        # Generate dense U points based on arc length
+        upoints = []
+        u = self.umin
+        while u <= self.umax:
+            upoints.append(u)
+            dx = baryfdxdu(u)
+            dy = baryfdydu(u)
+            dd = ds / math.hypot(dx, dy)
+            if u + dd > self.umax and u < self.umax:
+                u = self.umax
             else:
-                xu[1:-1], yu[1:-1], xv[1:-1], yv[1:-1], xw, yw[1:-1] = \
-                    np.array_split(res.x, \
-                                   [NN - 2, 2 * NN - 4, 3 * NN - 6, \
-                                    4 * NN - 8, 5 * NN - 8])  # qqq
+                u = u + dd
 
-            if "trace_result" in log:
-                print("solution is ...")
-                print("xu is ", xu)
-                print("yu is ", yu)
-                print("xv is ", xv)
-                print("yv is ", yv)
-                print("xw is ", xw)
-                print("yw is ", yw)
-
-
-            # check derivatives at each node pair...
-            fdxdu = diffmatu @ xu
-            fdydu = diffmatu @ yu
-            fdxdv = diffmatv @ xv
-            fdydv = diffmatv @ yv
-            fdxdw = diffmatw @ xw
-            fdydw = diffmatw @ yw
-
-            maxerr = 0
-
-            baryw.set_yi(fdxdw)
-            dxdwa = baryw(w_values)
-            baryw.set_yi(fdydw)
-            dydwa = baryw(w_values)
-            baryw.set_yi(xw)
-            xwcoorda = baryw(w_values)
-            baryw.set_yi(yw)
-            ywcoorda = baryw(w_values)
-
-            for i in range(len(unodes)):
-                xucoord = xu[i]
-                yucoord = yu[i]
-                dxdu = fdxdu[i]
-                dydu = fdydu[i]
-
-                for j in range(len(vnodes)):
-                    xvcoord = xv[j]
-                    yvcoord = yv[j]
-                    dxdv = fdxdv[j]
-                    dydv = fdydv[j]
-                    wvalue = w_values[i][j]
-
-                    xwcoord = xwcoorda[i,j]
-                    ywcoord = ywcoorda[i,j]
-                    dxdw = dxdwa[i,j]
-                    dydw = dydwa[i,j]
-
-                    dwdu = dwdu_values[i][j]
-                    dwdv = dwdv_values[i][j]
-                    lhs = dwdu * ((xucoord - xvcoord) * dydw - (yucoord - yvcoord) * dxdw)
-                    rhs = (xwcoord - xvcoord) * dydu - (ywcoord - yvcoord) * dxdu
-                    t = abs(lhs - rhs)*(umax-umin)
-                    if t > maxerr:
-                        maxerr = t
-
-                    lhs = dwdv * ((xucoord - xvcoord) * dydw - (yucoord - yvcoord) * dxdw)
-                    rhs = (xucoord - xwcoord) * dydv - (yucoord - ywcoord) * dxdv
-                    t = abs(lhs - rhs)*(vmax-vmin)
-                    if t > maxerr:
-                        maxerr = t
-
-                    lhs = dwdv * ((xwcoord - xvcoord) * dydu - (ywcoord - yvcoord) * dxdu)
-                    rhs = dwdu * ((xucoord - xwcoord) * dydv - (yucoord - ywcoord) * dxdv)
-                    t = abs(lhs - rhs)*(umax-umin)*(vmax-vmin)/(wmax-wmin)
-                    if t > maxerr:
-                        maxerr = t
-            print("max derivative errror is {:.2g}".format(maxerr))
-
-
-
-            # now iterate over the length of the u & v scales,
-            # verifying the nomogram at each step
-
-            # verify alignment every d mm
-            d = 1  # choose d
-            print("checking solution every ", d, "mm, ")
-            ds = d / math.sqrt(height * width)  # step size as fraction of the unit square
-
-            baryfdxdu = scipy.interpolate.BarycentricInterpolator(unodes, fdxdu)
-            baryfdydu = scipy.interpolate.BarycentricInterpolator(unodes, fdydu)
-            upoints = []
-            u = umin
-            while u <= umax:
-                #print("u is ", u, 100*(u-umin)/(umax-umin), "%")
-                upoints.append(u)
-                dx = baryfdxdu( u )
-                dy = baryfdydu( u )
-                # next u:
-                dd = ds / math.hypot(dx, dy)
-                if u + dd > umax and u < umax:
-                    u = umax
-                else:
-                    u = u+dd
-
-
-            baryfdxdv = scipy.interpolate.BarycentricInterpolator(vnodes, fdxdv)
-            baryfdydv = scipy.interpolate.BarycentricInterpolator(vnodes, fdydv)
-            vpoints = []
-            v = vmin
-            while v <= vmax:
-                #print("v is ", v, 100*(v-vmin)/(vmax-vmin), "%")
-                vpoints.append(v)
-                dx = baryfdxdv( v )
-                dy = baryfdydv( v )
-                # next v:
-                dd = ds / math.hypot(dx, dy)
-                if v + dd > vmax and v < vmax:
-                    v = vmax
-                else:
-                    v = v+dd
-
-
-            baryu.set_yi(xu)
-            xucoorda = baryu(upoints)
-            baryu.set_yi(yu)
-            yucoorda = baryu(upoints)
-
-            baryv.set_yi(xv)
-            xvcoorda = baryv(vpoints)
-            baryv.set_yi(yv)
-            yvcoorda = baryv(vpoints)
-
-            maxdiff = 0
-            for u, xucoord, yucoord in zip( upoints, xucoorda, yucoorda ):
-                for v, xvcoord, yvcoord in zip( vpoints, xvcoorda, yvcoorda ):
-                    def report_alignment(difference, xwcoord, ywcoord):
-                        print("u is ", u_user(u), " at pos (", xucoord, ",", yucoord, ")")
-                        print("v is ", v_user(v), " at pos (", xvcoord, ",", yvcoord, ")")
-                        print("w is ", w_user(wvalue), " at pos (", xwcoord, ",", ywcoord, ")")
-                        print( "alignment difference is {:5.2g} about {:5.2f} mm".format(difference, difference * math.sqrt(width * height)) )
-
-                    wvalue = w(u, v)
-                    xwcoord = evaluate(wvalue, wnodes, xw)
-                    ywcoord = evaluate(wvalue, wnodes, yw)
-                    difference = abs((xucoord - xvcoord) * (yucoord - ywcoord) - (xucoord - xwcoord) * (yucoord - yvcoord)) / \
-                        math.hypot(xucoord - xvcoord, xvcoord - yvcoord)
-
-                    if wvalue < wmin and not math.isclose(wvalue, wmin, rel_tol = 0.01):
-                        report_alignment(difference, xwcoord, ywcoord)
-                        print( "scale range error, please check w scale min limits", \
-                               "\nw({:g}, {:g}) = {:g} < wmin, {:g}".format(u_user(u), v_user(v), w_user(wvalue), wmin_user))
-                        #sys.exit("scale range error, please check w scale min limits"
-                              #   "\nw({:g}, {:g}) = {} < wmin, {}".format(u, v, wvalue, wmin))
-                    elif wvalue > wmax and not math.isclose(wvalue, wmax, rel_tol = 0.01):
-                        report_alignment(difference, xwcoord, ywcoord)
-                        print("scale range error, please check w scale max limits", \
-                              "\nw({:g}, {:g}) = {:g} > wmax, {:g}".format(u_user(u), v_user(v), w_user(wvalue), wmax_user))
-                        #sys.exit("scale range error, please check w scale max limits"
-                               #  "\nw({:g}, {:g}) = {} > wmax, {}".format(u, v, wvalue, wmax))
-
-                    if difference > maxdiff:
-                        maxdiff = difference
-                        if "trace_alignment" in log:
-                            report_alignment(difference, xwcoord, ywcoord)
-
-
-            aler = maxdiff * math.sqrt(width * height)
-            print("alignment error is estimated at less than {:5.2g} mm".format(aler))
-            if aler > 0.2:
-                print("alignment errors are possible - please check.")
-                print( "This nomogram used a polynomial defined with {} points ".format(NN) )
-                print("Try increasing this, or reduce the range of one or more scales")
-
-            # return the resulting axes into the nomogram parameters
-            params_u.update({'f': lambda u: evaluate(u_plot(u), unodes, xu),
-                             'g': lambda u: evaluate(u_plot(u), unodes, yu),
-                             'h': lambda u: 1.0,
-                             })
-            params_v.update({'f': lambda v: evaluate(v_plot(v), vnodes, xv),
-                             'g': lambda v: evaluate(v_plot(v), vnodes, yv),
-                             'h': lambda v: 1.0,
-                             })
-            params_w.update({'f': lambda w: evaluate(w_plot(w), wnodes, xw),
-                             'g': lambda w: evaluate(w_plot(w), wnodes, yw),
-                             'h': lambda w: 1.0,
-                             })
-
-            # get & print footer info
-            if 'footer_string' in main_params:
-                txt = r'\tiny \hfil {} \hfil'.format( main_params['footer_string'])
+        # Generate dense V points
+        vpoints = []
+        v = self.vmin
+        while v <= self.vmax:
+            vpoints.append(v)
+            dx = baryfdxdv(v)
+            dy = baryfdydv(v)
+            dd = ds / math.hypot(dx, dy)
+            if v + dd > self.vmax and v < self.vmax:
+                v = self.vmax
             else:
-                datestr = datetime.datetime.now().strftime("%d %b %y")
-                if aler > 0.1:
-                    tolstr = r", est tolerance {:5.2g} mm".format(aler)
-                else:
-                    tolstr = ""
+                v = v + dd
 
-                # '\' char is escape, '_' char is subscript, '$' is math mode, etc
-                escapes = "".maketrans({ '\\': r'$ \backslash $',
-                                         '^': r'\^{}',
-                                         '_': r'\_',
-                                         '~': r'$ \sim $',
-                                         '$': r'\$',
-                                         '#': r'\#',
-                                         '%': r'\%',
-                                         '&': r'\&',
-                                         '{': r'\{',
-                                         '}': r'\}' })
-                txt = r'\tiny \hfil {}: created by nomogen {} {} \hfil'. \
-                      format( main_params['filename'].translate(escapes), datestr, tolstr)
-                #print("txt is \"", txt, "\"", sep='')
+        # Batch Interpolate coordinates for these dense points
+        upoints = np.array(upoints)
+        vpoints = np.array(vpoints)
+        
+        xucoorda = _barycentric_interp_grid(upoints, self.unodes, self.u_weights, self.xu)
+        yucoorda = _barycentric_interp_grid(upoints, self.unodes, self.u_weights, self.yu)
+        xvcoorda = _barycentric_interp_grid(vpoints, self.vnodes, self.v_weights, self.xv)
+        yvcoorda = _barycentric_interp_grid(vpoints, self.vnodes, self.v_weights, self.yv)
 
-            footerText = {'x': 0,
-                          'y': 0.0,
-                          'text': txt,
-                          'width': width/10,
-                      }
-            if 'extra_texts' not in main_params:
-                main_params['extra_texts'] = [footerText]
-            else:
-                main_params['extra_texts'].append(footerText)
+        maxdiff = 0
+        
+        def evaluate(val, nodes, weights, y_vals):
+            return _barycentric_interp_scalar(val, nodes, weights, y_vals)
 
+        # Iterate over all pairs
+        for u, xucoord, yucoord in zip(upoints, xucoorda, yucoorda):
+            for v, xvcoord, yvcoord in zip(vpoints, xvcoorda, yvcoorda):
+                
+                wvalue = self.w_func(u, v) 
+                
+                xwcoord = evaluate(wvalue, self.wnodes, self.w_weights, self.xw)
+                ywcoord = evaluate(wvalue, self.wnodes, self.w_weights, self.yw)
+                
+                # Check linearity (normalized)
+                difference = abs((xucoord - xvcoord) * (yucoord - ywcoord) - (xucoord - xwcoord) * (yucoord - yvcoord)) / \
+                    math.hypot(xucoord - xvcoord, xvcoord - yvcoord)
 
-            ##################################################
-            # check if the tic marks on the scales clash
-            # swap sides if the w scale is too close to one of the outer scales
-            # unless the user has already specified a preference ...
+                # Report range errors
+                w_curr_user = self.w_user_trans(wvalue)
+                wmin_user = self.w_user_trans(self.wmin)
+                wmax_user = self.w_user_trans(self.wmax)
+                
+                if wvalue < self.wmin and not math.isclose(wvalue, self.wmin, rel_tol=0.01):
+                    print( "scale range error, please check w scale min limits", \
+                           "\nw({:g}, {:g}) = {:g} < wmin, {:g}".format(
+                               self.u_user_trans(u), self.v_user_trans(v), w_curr_user, wmin_user))
+                
+                elif wvalue > self.wmax and not math.isclose(wvalue, self.wmax, rel_tol=0.01):
+                    print("scale range error, please check w scale max limits", \
+                          "\nw({:g}, {:g}) = {:g} > wmax, {:g}".format(
+                              self.u_user_trans(u), self.v_user_trans(v), w_curr_user, wmax_user))
 
-            # account for v & w scales increasing downwards
-            if yw[0] > yw[-1]:
-                txw = xw[::-1]
-                wEast = 'left'
-                wWest = 'right'
-            else:
-                txw = xw
-                wEast = 'right'
-                wWest = 'left'
-            if yv[0] > yv[-1]:
-                txv = xv[::-1]
-                vEast = 'left'
-            else:
-                txv = xv
-                vEast = 'right'
+                if difference > maxdiff:
+                    maxdiff = difference
 
-            # the distance between axes
-            distuw = txw - xu
-            distvw = txv - txw
+        aler = maxdiff * math.sqrt(self.width * self.height)
+        print("alignment error is estimated at less than {:5.2g} mm".format(aler))
+        if aler > 0.2:
+            print("alignment errors are possible - please check.")
+            print(f"This nomogram used a polynomial defined with {self.NN} points ")
+            print("Try increasing this, or reduce the range of one or more scales")
 
-            if not 'tick_side' in params_u and np.min(distuw) < 0.2:
-                print('putting u scale ticks on left side')
-                params_u.update({'tick_side': 'left'})
+    def _inject_results(self):
+        """Creates callables for the final geometry and attaches them to params."""
+        def make_eval_func(nodes, weights, y_coeffs, plot_trans):
+            return lambda val: _barycentric_interp_scalar(plot_trans(val), nodes, weights, y_coeffs)
 
-            if (not 'tick_side' in params_v) and (np.min(distvw) < 0.2):
-                print( 'putting v scale ticks on {} side'.format(vEast) )
-                params_v.update({'tick_side': vEast})
-                params_v.update({'turn_relative': True})
+        self.params_u.update({
+            'f': make_eval_func(self.unodes, self.u_weights, self.xu, self.u_plot_trans),
+            'g': make_eval_func(self.unodes, self.u_weights, self.yu, self.u_plot_trans),
+            'h': lambda u: 1.0
+        })
+        self.params_v.update({
+            'f': make_eval_func(self.vnodes, self.v_weights, self.xv, self.v_plot_trans),
+            'g': make_eval_func(self.vnodes, self.v_weights, self.yv, self.v_plot_trans),
+            'h': lambda v: 1.0
+        })
+        self.params_w.update({
+            'f': make_eval_func(self.wnodes, self.w_weights, self.xw, self.w_plot_trans),
+            'g': make_eval_func(self.wnodes, self.w_weights, self.yw, self.w_plot_trans),
+            'h': lambda w: 1.0
+        })
 
+    def _configure_tick_placement(self):
+        """Heuristic logic to place ticks on the correct side of the curve."""
+        if self.yw[0] > self.yw[-1]:
+            wEast, wWest = 'left', 'right'
+        else:
+            wEast, wWest = 'right', 'left'
+        
+        vEast = 'left' if self.yv[0] > self.yv[-1] else 'right'
 
-            #print( 'vw norm is ', np.linalg.norm(xv - xw), ', uw norm is ', np.linalg.norm(xw - xu) )
-            if not 'tick_side' in params_w:
-                if np.linalg.norm(distuw) > np.linalg.norm(distvw):
-                    # the w scale line is closer to the v scale line
-                    params_w.update({'tick_side': wWest})
-                else:
-                    # the w scale line is closer to the u scale line
-                    params_w.update({'tick_side': wEast})
-                params_w.update({'turn_relative': True})
-                print( 'putting w scale ticks on {} side'.format(params_w['tick_side']) )
+        distuw = self.xw - self.xu
+        distvw = self.xv - self.xw
 
+        if 'tick_side' not in self.params_u and np.min(distuw) < 0.2:
+            self.params_u['tick_side'] = 'left'
 
-            # check for dual scales
-            # the first block holds the type_9 axes, (params_u, etc)
-            # then type_8 or maybe type_9 blocks follow with the dual scales
+        if 'tick_side' not in self.params_v and np.min(distvw) < 0.2:
+            self.params_v['tick_side'] = vEast
+            self.params_v['turn_relative'] = True
 
-            ## TODO:
-            # atm the dual scales are considered after calculating the axes.
-            # in a future version, more than a single equation might be allowed,
-            # so the blocks should be analysed before the scales are calculated
+        if 'tick_side' not in self.params_w:
+            self.params_w['tick_side'] = wWest if np.linalg.norm(distuw) > np.linalg.norm(distvw) else wEast
+            self.params_w['turn_relative'] = True
+            print(f'Putting w scale ticks on {self.params_w["tick_side"]} side')
 
-            for params in [params_u, params_v, params_w]:
-                if 'tag' in params:
-                    # look for a matching tag
-                    # check and copy the newly calculated functions across
-                    ltag = params['tag']
-                    for b in main_params['block_params'][1:]:
-                        if b['block_type'] == 'type_8':
-                            if not 'f_params' in b:
-                                sys.exit('''
-                                dual axis tag '{}' should have an 'f_params' parameter
-                                '''.format(ltag) )
-                            laxis = b['f_params']
-                            if 'tag' in laxis and laxis['tag'] == ltag:
-                                # don't copy function if the user has already defined one
-                                if not 'function_x' in laxis:
-                                    print( 'dual scales found for axes with tag \'{}\''.format(ltag) )
-                                    if not 'align_func' in laxis:
-                                        sys.exit('''
-                                        dual axis tag '{}' must have an 'align_func' parameter
-                                        '''.format(ltag) )
-                                    fal = laxis['align_func']
-                                    # params & fal must be evaluated now, not when 'fuction_?' is called
-                                    laxis['function_x'] = functools.partial(lambda u, p, f: p['f'](f(u)),
-                                                                            p=params, f=fal)
-                                    laxis['function_y'] = functools.partial(lambda u, p, f: p['g'](f(u)),
-                                                                            p=params, f=fal)
-
-                        elif b['block_type'] == 'type_9':
-                            for fp in [ 'f1_params', 'f2_params', 'f3_params' ]:
-                                if not fp in b:
-                                    sys.exit('''
-                                    dual axis tag '{}' should have an '{}' parameter
-                                    '''.format(ltag, fp) )
-                                laxis = b[fp]
-                                # don't copy function if the user has already defined one
-                                if not 'f' in laxis:
-                                    if 'tag' in laxis and laxis['tag'] == ltag:
-                                        print( 'dual scales found for axes with tag \'{}\''.format(ltag) )
-                                        if not 'align_func' in laxis:
-                                            sys.exit('''
-                                            dual axis tag '{}' must have an 'align_func' parameter
-                                            '''.format(ltag) )
-                                        fal = laxis['align_func']
-                                        # params & fal must be evaluated now, not when 'fuction_?' is called
-                                        laxis['f'] = functools.partial(lambda u, p, f: p['f'](f(u)),
-                                                                                p=params, f=fal)
-                                        laxis['g'] = functools.partial(lambda u, p, f: p['g'](f(u)),
-                                                                                p=params, f=fal)
-                                        laxis['h'] = params['h']
-
-
-     # end of __init__
-
-######################### end of nomogen.py ########################
+    def _configure_dual_scales(self):
+        """Links secondary scales (Type 8 or Type 9) to the main generated scales."""
+        for params in [self.params_u, self.params_v, self.params_w]:
+            if 'tag' not in params: continue
+            ltag = params['tag']
+            
+            # Search other blocks for matching tags
+            for b in self.main_params['block_params'][1:]:
+                if b['block_type'] == 'type_8':
+                    laxis = b.get('f_params', {})
+                    if laxis.get('tag') == ltag and 'function_x' not in laxis:
+                        if 'align_func' not in laxis: sys.exit(f"dual axis '{ltag}' needs 'align_func'")
+                        fal = laxis['align_func']
+                        laxis['function_x'] = functools.partial(lambda u, p, f: p['f'](f(u)), p=params, f=fal)
+                        laxis['function_y'] = functools.partial(lambda u, p, f: p['g'](f(u)), p=params, f=fal)
+                        
+                elif b['block_type'] == 'type_9':
+                    for fp in ['f1_params', 'f2_params', 'f3_params']:
+                        if fp in b:
+                            laxis = b[fp]
+                            if laxis.get('tag') == ltag and 'f' not in laxis:
+                                if 'align_func' not in laxis: sys.exit(f"dual axis '{ltag}' needs 'align_func'")
+                                fal = laxis['align_func']
+                                laxis['f'] = functools.partial(lambda u, p, f: p['f'](f(u)), p=params, f=fal)
+                                laxis['g'] = functools.partial(lambda u, p, f: p['g'](f(u)), p=params, f=fal)
+                                laxis['h'] = params['h']

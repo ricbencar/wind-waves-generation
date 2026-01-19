@@ -27,56 +27,36 @@ def calculate_adjusted_wind_speed(U10):
 def calculate_depth_limited(wind_speed_adjusted, fetch, depth, gravity=9.8066):
     """
     Calculates wave properties for depth-limited conditions using the Revised SMB method.
-
-    This function implements the unified equations from Hurdle & Stive (1989),
-    which correct the inconsistencies found in the original SPM (1984) formulations
-    at the transition between deep and shallow water.
-
-    Args:
-        wind_speed_adjusted (float): Adjusted wind speed (Ua) (m/s).
-        fetch (float):      Effective fetch length (m).
-        depth (float):      Water depth (m).
-        gravity (float):    Acceleration of gravity (m/s^2).
-
-    Returns:
-        tuple: A tuple containing Hs (m), Ts (s), and t_min (hours).
+    Matches C++ 'calculate_depth_limited' logic (Hurdle & Stive, 1989).
     """
     # --- Dimensionless Parameters ---
     dim_fetch = (gravity * fetch) / wind_speed_adjusted**2
     dim_depth = (gravity * depth) / wind_speed_adjusted**2
 
-    # --- Revised Significant Wave Height (Hs) ---
-    # Hurdle & Stive (1989), Eq 4.1
-    # Coefficient is 0.25 (vs 0.283 in SPM)
-    # Depth term: tanh(0.6 * d_hat^0.75)
-    # Fetch term inner: 4.3e-5 * F_hat / (depth_term^2)
-    # Exponent: 0.5
+    # --- Significant Wave Height (Hs) ---
     depth_term_h = math.tanh(0.6 * dim_depth**0.75)
+    # Guard against division by zero if depth is extremely small (matches C++ check)
+    if depth_term_h < 1e-6: depth_term_h = 1e-6
+
     fetch_term_inner_h = (4.3e-5 * dim_fetch) / (depth_term_h**2)
-    
     gHs_U2 = 0.25 * depth_term_h * (math.tanh(fetch_term_inner_h))**0.5
     Hs = gHs_U2 * (wind_speed_adjusted**2 / gravity)
 
-    # --- Revised Significant Wave Period (Ts) ---
-    # Hurdle & Stive (1989), Eq 4.2
-    # Coefficient is 8.3 (vs 7.54 in SPM)
-    # Depth term: tanh(0.76 * d_hat^0.375)
-    # Fetch term inner: 4.1e-5 * F_hat / (depth_term^3)
-    # Exponent: 1/3
+    # --- Significant Wave Period (Ts) ---
     depth_term_t = math.tanh(0.76 * dim_depth**0.375)
+    if depth_term_t < 1e-6: depth_term_t = 1e-6
+
     fetch_term_inner_t = (4.1e-5 * dim_fetch) / (depth_term_t**3)
-    
     gTs_U = 8.3 * depth_term_t * (math.tanh(fetch_term_inner_t))**(1/3)
     Ts = gTs_U * (wind_speed_adjusted / gravity)
 
     # --- Minimum Wind Duration (t_min) Calculation ---
-    # Retained from Etemad-Shahidi et al. (2009) as requested.
-    log_dim_fetch = math.log(dim_fetch)
-    A, B, C, D = 0.0161, 0.3692, 2.2024, 0.8798
-    exponent_term = (A * log_dim_fetch**2 - B * log_dim_fetch + C)**0.5 + D * log_dim_fetch
-    gt_min_U = 6.5882 * math.exp(exponent_term)
-    t_min_seconds = gt_min_U * wind_speed_adjusted / gravity
-    t_min_hours = t_min_seconds / 3600  # Convert to hours for hours use
+    # Uses the deep water expression (Eq 3.15/4.12) as recommended by Hurdle & Stive (1989)
+    # for limiting duration in all circumstances.
+    dim_duration = 65.9 * (dim_fetch**(2.0/3.0))
+    
+    t_min_seconds = dim_duration * wind_speed_adjusted / gravity
+    t_min_hours = t_min_seconds / 3600  # Convert to hours
 
     return Hs, Ts, t_min_hours
 
@@ -132,7 +112,7 @@ def generate_combined_chart_depth_limited(min_wind_speed, max_wind_speed, num_wi
         hs_levels = np.arange(np.floor(Hs_finite_values.min() * 4) / 4, np.ceil(Hs_finite_values.max() * 4) / 4 + 0.25, 0.25)
         hs_contour = plt.contour(U10_grid, F_grid_km, Hs_values,
                                  levels=hs_levels,
-                                 colors='black', linestyles='solid', linewidths=1.0)
+                                 colors='black', linestyles='solid', linewidths=3.0)
         plt.clabel(hs_contour, inline=True, fontsize=10, fmt='Hs=%.2f')
     else:
         print("Warning: No finite Hs values to plot. Check input ranges.")
@@ -172,16 +152,15 @@ def generate_combined_chart_depth_limited(min_wind_speed, max_wind_speed, num_wi
     plt.savefig('smb_chart_10m.pdf')
     print("Combined chart generation complete.")
 
-
 if __name__ == "__main__":
-    # Define the parameters for the charts as per user's request
+    # Define the parameters for the charts
     WIND_SPEED_MIN = 5
     WIND_SPEED_MAX = 35
-    NUM_WIND_STEPS = 50
+    NUM_WIND_STEPS = 1000  # UPDATED: Increased from 50 to 1000
 
     FETCH_KM_MIN = 1
     FETCH_KM_MAX = 50
-    NUM_FETCH_STEPS = 50
+    NUM_FETCH_STEPS = 1000 # UPDATED: Increased from 50 to 1000
 
     FIXED_DEPTH = 10 # Fixed depth of 10 meters
 
