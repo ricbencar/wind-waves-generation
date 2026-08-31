@@ -1,0 +1,2021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07111f">
+  <title>SMB Wave Prediction Calculator</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --bg-deep: #030a12;
+      --panel: #0d1b2d;
+      --panel-2: #12243a;
+      --panel-3: #172d48;
+      --panel-glass: rgba(13, 27, 45, 0.90);
+      --border: #284663;
+      --border-soft: rgba(62, 103, 139, 0.52);
+      --text: #eef6ff;
+      --muted: #a9bdd2;
+      --muted-2: #7893ac;
+      --accent: #37a4ff;
+      --accent-2: #76c6ff;
+      --accent-3: #46e1ff;
+      --accent-dark: #0f70bd;
+      --good: #68d7a7;
+      --warning: #ffc86b;
+      --danger: #ff7c85;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+      --shadow-soft: 0 12px 34px rgba(0, 0, 0, 0.25);
+      --radius: 18px;
+      --radius-small: 12px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -8%, rgba(55, 164, 255, 0.22), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(70, 225, 255, 0.10), transparent 28rem),
+        linear-gradient(150deg, #07111f 0%, #091827 46%, #040c16 100%);
+      font-size: 16px;
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.22;
+      background-image:
+        linear-gradient(rgba(118, 198, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(118, 198, 255, 0.045) 1px, transparent 1px);
+      background-size: 46px 46px;
+      mask-image: linear-gradient(to bottom, black, transparent 82%);
+      z-index: -2;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      width: 520px;
+      height: 520px;
+      right: -250px;
+      bottom: -280px;
+      border-radius: 50%;
+      background: rgba(55, 164, 255, 0.12);
+      filter: blur(90px);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    button, input { font: inherit; }
+
+    button { -webkit-tap-highlight-color: transparent; }
+
+    .app-shell {
+      width: min(1560px, calc(100% - 34px));
+      margin: 0 auto;
+      padding: 22px 0 34px;
+    }
+
+    .topbar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px 21px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(115deg, rgba(23, 45, 72, 0.92), rgba(9, 24, 40, 0.94)),
+        var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .topbar::after {
+      content: "";
+      position: absolute;
+      right: -55px;
+      top: -95px;
+      width: 320px;
+      height: 220px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(55, 164, 255, 0.21), transparent 68%);
+      pointer-events: none;
+    }
+
+    .brand {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 58px;
+      height: 58px;
+      border: 1px solid rgba(118, 198, 255, 0.45);
+      border-radius: 17px;
+      color: var(--accent-2);
+      background: linear-gradient(145deg, rgba(55, 164, 255, 0.22), rgba(8, 29, 49, 0.76));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 32px rgba(0, 0, 0, 0.24);
+    }
+
+    .brand-mark svg { width: 36px; height: 36px; }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 4px;
+      color: var(--accent-2);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-3);
+      box-shadow: 0 0 14px rgba(70, 225, 255, 0.85);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(1.45rem, 2.4vw, 2.25rem);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    .brand p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    .header-badges {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 9px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 8px 11px;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(4, 16, 28, 0.56);
+      font-size: 0.76rem;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .badge svg { width: 15px; height: 15px; color: var(--accent-2); }
+    .badge.good { color: #b8f5dd; border-color: rgba(104, 215, 167, 0.37); }
+    .badge.good svg { color: var(--good); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(330px, 400px) minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+      margin-top: 20px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel-glass);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(14px);
+    }
+
+    .inputs-panel {
+      position: sticky;
+      top: 16px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(25, 48, 75, 0.88), rgba(17, 36, 58, 0.84));
+    }
+
+    .panel-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-title-icon {
+      display: grid;
+      place-items: center;
+      width: 31px;
+      height: 31px;
+      border-radius: 9px;
+      color: var(--accent-2);
+      background: rgba(55, 164, 255, 0.14);
+    }
+
+    .panel-title-icon svg { width: 18px; height: 18px; }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 1.05rem;
+      letter-spacing: 0.005em;
+    }
+
+    .panel-kicker {
+      color: var(--muted-2);
+      font-size: 0.73rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .panel-body { padding: 18px; }
+
+    .error-bar {
+      display: none;
+      margin-bottom: 14px;
+      padding: 11px 13px;
+      border: 1px solid rgba(255, 124, 133, 0.52);
+      border-radius: 11px;
+      color: #ffd9dc;
+      background: rgba(117, 24, 33, 0.33);
+      font-size: 0.88rem;
+      font-weight: 650;
+    }
+
+    .error-bar.visible { display: block; }
+
+    .input-grid { display: grid; gap: 15px; }
+
+    .field { display: grid; gap: 7px; }
+
+    .field-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 0.87rem;
+      font-weight: 700;
+    }
+
+    .symbol {
+      color: var(--accent-2);
+      font-weight: 800;
+    }
+
+    .input-wrap { position: relative; }
+
+    input[type="number"] {
+      width: 100%;
+      min-height: 47px;
+      padding: 11px 68px 11px 13px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      outline: none;
+      color: var(--text);
+      background: #09182a;
+      font-weight: 700;
+      transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease, opacity 140ms ease;
+    }
+
+    input[type="number"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(55, 164, 255, 0.18);
+      background: #0b1c30;
+    }
+
+    input[type="number"]:disabled {
+      opacity: 0.53;
+      cursor: not-allowed;
+      background: #07131f;
+    }
+
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { margin: 0; }
+
+    .unit {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      padding-left: 11px;
+      border-left: 1px solid var(--border-soft);
+      color: var(--muted-2);
+      font-size: 0.77rem;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+    }
+
+    .field-hint {
+      margin: 0;
+      color: var(--muted-2);
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+
+    .switch-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 750;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .switch-control input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .switch-track {
+      position: relative;
+      width: 38px;
+      height: 21px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #06111e;
+      transition: 160ms ease;
+    }
+
+    .switch-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--muted-2);
+      transition: 160ms ease;
+    }
+
+    .switch-control input:checked + .switch-track {
+      border-color: rgba(55, 164, 255, 0.62);
+      background: rgba(55, 164, 255, 0.25);
+      box-shadow: inset 0 0 12px rgba(55, 164, 255, 0.16);
+    }
+
+    .switch-control input:checked + .switch-track::after {
+      left: 20px;
+      background: var(--accent-2);
+      box-shadow: 0 0 10px rgba(118, 198, 255, 0.62);
+    }
+
+    .switch-control input:focus-visible + .switch-track {
+      outline: 3px solid rgba(55, 164, 255, 0.23);
+      outline-offset: 2px;
+    }
+
+    .formula-note {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      color: var(--muted);
+      background: linear-gradient(145deg, rgba(18, 36, 58, 0.76), rgba(7, 21, 35, 0.73));
+      font-size: 0.78rem;
+    }
+
+    .formula-note svg {
+      width: 18px;
+      height: 18px;
+      color: var(--accent-2);
+      margin-top: 1px;
+    }
+
+    .formula-note strong { color: var(--text); }
+
+    .button-stack {
+      display: grid;
+      gap: 10px;
+      margin-top: 2px;
+    }
+
+    .primary-button,
+    .secondary-button,
+    .icon-button {
+      border: 0;
+      border-radius: 11px;
+      cursor: pointer;
+      font-weight: 780;
+      transition: transform 120ms ease, filter 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      min-height: 49px;
+      padding: 12px 16px;
+      color: #00101e;
+      background: linear-gradient(135deg, var(--accent-2), var(--accent));
+      box-shadow: 0 12px 30px rgba(55, 164, 255, 0.24);
+    }
+
+    .primary-button svg { width: 19px; height: 19px; }
+
+    .secondary-button {
+      min-height: 42px;
+      padding: 10px 14px;
+      color: var(--text);
+      border: 1px solid var(--border);
+      background: #11263d;
+    }
+
+    .primary-button:hover,
+    .secondary-button:hover,
+    .icon-button:hover { filter: brightness(1.09); }
+
+    .primary-button:active,
+    .secondary-button:active,
+    .icon-button:active { transform: translateY(1px); }
+
+    .primary-button:focus-visible,
+    .secondary-button:focus-visible,
+    .icon-button:focus-visible {
+      outline: 3px solid rgba(55, 164, 255, 0.25);
+      outline-offset: 2px;
+    }
+
+    .split-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .local-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      margin: 4px 0 0;
+      color: var(--muted-2);
+      font-size: 0.72rem;
+      text-align: center;
+    }
+
+    .local-note svg { width: 14px; height: 14px; color: var(--good); }
+
+    .results-panel { min-height: 760px; }
+    .results-body { padding: 18px; }
+
+    .status-ribbon {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-bottom: 15px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: rgba(7, 21, 35, 0.67);
+      overflow: hidden;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 12px 14px;
+      border-right: 1px solid var(--border-soft);
+    }
+
+    .status-item:last-child { border-right: 0; }
+
+    .status-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 33px;
+      height: 33px;
+      border-radius: 10px;
+      color: var(--accent-2);
+      background: rgba(55, 164, 255, 0.13);
+    }
+
+    .status-icon svg { width: 18px; height: 18px; }
+
+    .status-copy { min-width: 0; }
+
+    .status-label {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--muted-2);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .status-value {
+      display: block;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 0.84rem;
+      font-weight: 780;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-value.good { color: var(--good); }
+    .status-value.warning { color: var(--warning); }
+    .status-value.danger { color: var(--danger); }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 13px;
+      margin-bottom: 15px;
+    }
+
+    .metric-card {
+      position: relative;
+      min-width: 0;
+      min-height: 132px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: linear-gradient(145deg, rgba(21, 45, 72, 0.95), rgba(10, 25, 42, 0.94));
+      box-shadow: var(--shadow-soft);
+      overflow: hidden;
+    }
+
+    .metric-card::after {
+      content: "";
+      position: absolute;
+      width: 110px;
+      height: 110px;
+      right: -58px;
+      bottom: -68px;
+      border-radius: 50%;
+      background: rgba(55, 164, 255, 0.13);
+      filter: blur(3px);
+    }
+
+    .metric-card.featured {
+      border-color: rgba(55, 164, 255, 0.58);
+      background:
+        radial-gradient(circle at 100% 0%, rgba(70, 225, 255, 0.16), transparent 55%),
+        linear-gradient(145deg, rgba(20, 65, 104, 0.98), rgba(9, 31, 52, 0.96));
+    }
+
+    .metric-icon {
+      display: grid;
+      place-items: center;
+      width: 31px;
+      height: 31px;
+      margin-bottom: 13px;
+      border-radius: 9px;
+      color: var(--accent-2);
+      background: rgba(55, 164, 255, 0.13);
+    }
+
+    .metric-icon svg { width: 18px; height: 18px; }
+
+    .metric-label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 760;
+    }
+
+    .metric-value {
+      position: relative;
+      z-index: 1;
+      display: block;
+      margin-top: 5px;
+      font-size: clamp(1.2rem, 2.2vw, 1.75rem);
+      font-weight: 820;
+      letter-spacing: -0.035em;
+      overflow-wrap: anywhere;
+    }
+
+    .metric-value small {
+      color: var(--muted);
+      font-size: 0.54em;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(310px, 0.82fr);
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+
+    .subpanel {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: linear-gradient(145deg, rgba(15, 34, 56, 0.92), rgba(7, 21, 35, 0.92));
+      overflow: hidden;
+    }
+
+    .subpanel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .subpanel-head h3 {
+      margin: 0;
+      font-size: 0.91rem;
+    }
+
+    .subpanel-note {
+      color: var(--muted-2);
+      font-size: 0.69rem;
+    }
+
+    .wave-stage {
+      position: relative;
+      min-height: 295px;
+      background:
+        radial-gradient(circle at 70% 15%, rgba(55, 164, 255, 0.13), transparent 30%),
+        linear-gradient(180deg, rgba(7, 24, 41, 0.45), rgba(4, 15, 26, 0.85));
+      overflow: hidden;
+    }
+
+    .wave-stage svg {
+      display: block;
+      width: 100%;
+      min-height: 295px;
+    }
+
+    .wave-grid-line {
+      stroke: rgba(118, 198, 255, 0.10);
+      stroke-width: 1;
+    }
+
+    #waveSurfaceGlow {
+      fill: none;
+      stroke: rgba(70, 225, 255, 0.18);
+      stroke-width: 11;
+      filter: blur(5px);
+    }
+
+    #waveSurface {
+      fill: none;
+      stroke: url(#waveStroke);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 18 8;
+      animation: drift 6s linear infinite;
+    }
+
+    @keyframes drift {
+      to { stroke-dashoffset: -104; }
+    }
+
+    #waterFill { fill: url(#waterFillGradient); }
+    #seabed { stroke: rgba(255, 200, 107, 0.56); stroke-width: 2; }
+    .measure-line { stroke: rgba(238, 246, 255, 0.47); stroke-width: 1.3; stroke-dasharray: 5 5; }
+    .measure-text { fill: #dcecff; font-size: 16px; font-weight: 700; }
+    .measure-subtext { fill: #7893ac; font-size: 13px; font-weight: 600; }
+
+    .detail-list { padding: 4px 14px 10px; }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 11px 0;
+      border-bottom: 1px solid rgba(40, 70, 99, 0.43);
+    }
+
+    .detail-row:last-child { border-bottom: 0; }
+
+    .detail-label {
+      color: var(--muted);
+      font-size: 0.79rem;
+      font-weight: 680;
+    }
+
+    .detail-value {
+      color: var(--text);
+      font-size: 0.84rem;
+      font-weight: 790;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .scenario-panel { margin-bottom: 15px; }
+
+    .scenario-body {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 13px;
+      padding: 14px;
+    }
+
+    .scenario-card {
+      padding: 13px;
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      background: rgba(9, 25, 42, 0.76);
+    }
+
+    .scenario-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 11px;
+    }
+
+    .scenario-title {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .scenario-tag {
+      padding: 4px 7px;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(18, 36, 58, 0.75);
+      font-size: 0.64rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .scenario-tag.controlling {
+      color: #bde8ff;
+      border-color: rgba(55, 164, 255, 0.56);
+      background: rgba(55, 164, 255, 0.15);
+    }
+
+    .scenario-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .scenario-stat span { display: block; }
+    .scenario-stat .s-label { color: var(--muted-2); font-size: 0.65rem; font-weight: 750; }
+    .scenario-stat .s-value { margin-top: 3px; color: var(--text); font-size: 0.79rem; font-weight: 800; }
+
+    .bar-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #06111e;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent-dark), var(--accent-3));
+      box-shadow: 0 0 14px rgba(55, 164, 255, 0.35);
+      transition: width 500ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .report-panel { margin-bottom: 15px; }
+
+    .report-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .report-heading-wrap h3 { margin: 0; font-size: 0.91rem; }
+    .report-heading-wrap p { margin: 3px 0 0; color: var(--muted-2); font-size: 0.69rem; }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 35px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: #11263d;
+      font-size: 0.72rem;
+    }
+
+    .icon-button svg { width: 15px; height: 15px; color: var(--accent-2); }
+
+    .status-text {
+      min-height: 1.1em;
+      margin-left: auto;
+      color: var(--good);
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 460px;
+      max-height: 660px;
+      overflow: auto;
+      padding: 17px;
+      color: #e7f3ff;
+      background:
+        linear-gradient(rgba(118, 198, 255, 0.025) 1px, transparent 1px),
+        #050e19;
+      background-size: 100% 28px;
+      font: 14px/1.48 "Cascadia Mono", "SFMono-Regular", Consolas, "Courier New", monospace;
+      tab-size: 4;
+      white-space: pre;
+      scrollbar-color: #284663 #06101d;
+    }
+
+    .methodology {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(7, 21, 35, 0.68);
+      overflow: hidden;
+    }
+
+    .methodology summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 15px;
+      cursor: pointer;
+      list-style: none;
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 800;
+    }
+
+    .methodology summary::-webkit-details-marker { display: none; }
+
+    .methodology summary::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--accent-2);
+      background: rgba(55, 164, 255, 0.08);
+      font-size: 1rem;
+      transition: transform 160ms ease;
+    }
+
+    .methodology[open] summary::after { content: "−"; }
+
+    .methodology-content {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 0 15px 15px;
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .formula-card {
+      margin-top: 13px;
+      padding: 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: 11px;
+      background: rgba(14, 34, 56, 0.72);
+    }
+
+    .formula-card h4 {
+      margin: 0 0 7px;
+      color: var(--accent-2);
+      font-size: 0.75rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .formula-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.74rem;
+      line-height: 1.55;
+    }
+
+    .equation {
+      display: block;
+      margin-top: 7px;
+      color: var(--text);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 0.72rem;
+      overflow-wrap: anywhere;
+    }
+
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 19px 8px 0;
+      color: var(--muted-2);
+      font-size: 0.76rem;
+      text-align: center;
+    }
+
+    footer svg { width: 15px; height: 15px; color: var(--accent-2); }
+
+    @media (max-width: 1240px) {
+      .hero-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .analysis-grid { grid-template-columns: 1fr; }
+      .wave-stage, .wave-stage svg { min-height: 270px; }
+    }
+
+    @media (max-width: 1020px) {
+      .workspace { grid-template-columns: 1fr; }
+      .inputs-panel { position: static; }
+      .results-panel { min-height: 0; }
+    }
+
+    @media (max-width: 720px) {
+      body { font-size: 15px; }
+      .app-shell { width: min(100% - 18px, 1560px); padding-top: 9px; }
+      .topbar { align-items: stretch; flex-direction: column; padding: 15px; }
+      .brand-mark { width: 50px; height: 50px; }
+      .header-badges { justify-content: flex-start; }
+      .status-ribbon { grid-template-columns: 1fr; }
+      .status-item { border-right: 0; border-bottom: 1px solid var(--border-soft); }
+      .status-item:last-child { border-bottom: 0; }
+      .hero-grid { grid-template-columns: 1fr; }
+      .scenario-body { grid-template-columns: 1fr; }
+      .methodology-content { grid-template-columns: 1fr; }
+      .report-toolbar { align-items: flex-start; flex-direction: column; }
+      .toolbar-actions { width: 100%; flex-wrap: wrap; }
+      .icon-button { flex: 1 1 auto; }
+      .status-text { width: 100%; margin-left: 0; }
+      pre { font-size: 12px; min-height: 400px; }
+    }
+
+    @media (max-width: 460px) {
+      .brand { align-items: flex-start; }
+      .brand-mark { display: none; }
+      .panel-body, .results-body { padding: 13px; }
+      .split-actions { grid-template-columns: 1fr; }
+      .scenario-stats { grid-template-columns: 1fr; }
+      .scenario-stat { display: flex; justify-content: space-between; gap: 12px; }
+      .scenario-stat .s-value { margin-top: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    @media print {
+      :root { color-scheme: light; }
+      body { color: black; background: white; }
+      body::before, body::after { display: none; }
+      .app-shell { width: 100%; padding: 0; }
+      .topbar, .inputs-panel, .status-ribbon, .hero-grid, .analysis-grid, .scenario-panel,
+      .report-toolbar, .methodology, footer { display: none !important; }
+      .workspace { display: block; margin: 0; }
+      .panel, .subpanel { border: 0; box-shadow: none; background: white; }
+      .results-body { padding: 0; }
+      pre {
+        max-height: none;
+        min-height: 0;
+        overflow: visible;
+        padding: 0;
+        color: black;
+        background: white;
+        white-space: pre-wrap;
+        font-size: 9.5pt;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none">
+            <path d="M4 29C9.5 29 9.5 23 15 23C20.5 23 20.5 29 26 29C31.5 29 31.5 23 37 23C40.2 23 42 25 44 26.7" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+            <path d="M4 36C9.5 36 9.5 30 15 30C20.5 30 20.5 36 26 36C31.5 36 31.5 30 37 30C40.2 30 42 32 44 33.7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" opacity="0.58"/>
+            <path d="M24 6V17M18.5 11.5H29.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" opacity="0.88"/>
+          </svg>
+        </div>
+        <div>
+          <div class="eyebrow">Coastal Engineering Toolkit</div>
+          <h1>SMB Wave Prediction Calculator</h1>
+          <p>Revised Sverdrup–Munk–Bretschneider model with finite-depth and duration controls.</p>
+        </div>
+      </div>
+      <div class="header-badges" aria-label="Application characteristics">
+        <span class="badge">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 19h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Hurdle &amp; Stive 1989
+        </span>
+        <span class="badge good">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.8 12.8 10.5 15.5 16.7 8.8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 3.5 19.5 7v5c0 4.8-3.2 7.5-7.5 8.8C7.7 19.5 4.5 16.8 4.5 12V7L12 3.5Z" stroke="currentColor" stroke-width="1.8"/></svg>
+          Offline &amp; Standalone
+        </span>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="panel inputs-panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M7 12h10M9 18h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="6" r="2" fill="currentColor"/><circle cx="9" cy="12" r="2" fill="currentColor"/><circle cx="13" cy="18" r="2" fill="currentColor"/></svg>
+            </span>
+            <h2>Wave-generation inputs</h2>
+          </div>
+          <span class="panel-kicker">SI units</span>
+        </div>
+        <div class="panel-body">
+          <div id="errorBar" class="error-bar" role="alert"></div>
+          <form id="calculatorForm" class="input-grid" novalidate>
+            <div class="field">
+              <div class="field-top">
+                <label for="u10">Wind speed at 10 m, <span class="symbol">U10</span></label>
+              </div>
+              <div class="input-wrap">
+                <input id="u10" type="number" min="0" step="any" value="25" inputmode="decimal" autocomplete="off">
+                <span class="unit">m/s</span>
+              </div>
+              <p class="field-hint">Standard meteorological wind speed measured 10 m above the surface.</p>
+            </div>
+
+            <div class="field">
+              <div class="field-top">
+                <label for="fetch">Fetch length, <span class="symbol">F</span></label>
+              </div>
+              <div class="input-wrap">
+                <input id="fetch" type="number" min="0" step="any" value="45" inputmode="decimal" autocomplete="off">
+                <span class="unit">km</span>
+              </div>
+              <p class="field-hint">Uninterrupted distance over which the wind acts on the water surface.</p>
+            </div>
+
+            <div class="field">
+              <div class="field-top">
+                <label for="duration">Storm duration, <span class="symbol">t<sub>act</sub></span></label>
+                <label class="switch-control" for="infiniteDuration">
+                  <input id="infiniteDuration" type="checkbox" checked>
+                  <span class="switch-track" aria-hidden="true"></span>
+                  Infinite
+                </label>
+              </div>
+              <div class="input-wrap">
+                <input id="duration" type="number" min="0" step="any" value="" placeholder="Infinite" inputmode="decimal" autocomplete="off" disabled>
+                <span class="unit">hours</span>
+              </div>
+              <p class="field-hint">Finite duration activates the effective-fetch inversion used by the C++ model.</p>
+            </div>
+
+            <div class="field">
+              <div class="field-top">
+                <label for="depth">Water depth, <span class="symbol">d</span></label>
+                <label class="switch-control" for="deepWater">
+                  <input id="deepWater" type="checkbox">
+                  <span class="switch-track" aria-hidden="true"></span>
+                  Deep water
+                </label>
+              </div>
+              <div class="input-wrap">
+                <input id="depth" type="number" min="0" step="any" value="10" inputmode="decimal" autocomplete="off">
+                <span class="unit">m</span>
+              </div>
+              <p class="field-hint">Deep-water mode uses the analytical dispersion relation and SMB asymptotes.</p>
+            </div>
+
+            <div class="formula-note">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5v6M12 7.5h.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+              <div><strong>Calculation basis.</strong> Inputs and equations reproduce the calculation path and report logic of <code>calculator_gui.cpp</code>, including the original constant <strong>g = 9.8066 m/s²</strong>.</div>
+            </div>
+
+            <div class="button-stack">
+              <button class="primary-button" type="submit">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 14c3.2 0 3.2-4 6.4-4s3.2 4 6.4 4 3.2-4 5.2-4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M5 5h14M8 19h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".78"/></svg>
+                Calculate wave state
+              </button>
+              <div class="split-actions">
+                <button id="resetButton" class="secondary-button" type="button">Reset defaults</button>
+                <button id="focusReportButton" class="secondary-button" type="button">Open report</button>
+              </div>
+            </div>
+            <p class="local-note">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" stroke-width="2"/></svg>
+              All calculations remain on this device; no network connection is used.
+            </p>
+          </form>
+        </div>
+      </aside>
+
+      <section class="panel results-panel">
+        <div class="panel-header">
+          <div class="panel-title-wrap">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 18V8m5 10V4m5 14v-7m5 7V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </span>
+            <h2>Prediction dashboard</h2>
+          </div>
+          <span id="calculationStamp" class="panel-kicker">Ready</span>
+        </div>
+
+        <div class="results-body">
+          <div class="status-ribbon" aria-label="Calculated condition summary">
+            <div class="status-item">
+              <span class="status-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 7h14M5 12h9M5 17h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m16 14 3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="status-copy">
+                <span class="status-label">Controlling factor</span>
+                <span id="controlStatus" class="status-value">—</span>
+              </span>
+            </div>
+            <div class="status-item">
+              <span class="status-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 9c2 0 2-2.5 4-2.5S10 9 12 9s2-2.5 4-2.5S18 9 20 9M4 15c2 0 2-2.5 4-2.5s2 2.5 4 2.5 2-2.5 4-2.5 2 2.5 4 2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <span class="status-copy">
+                <span class="status-label">Flow regime</span>
+                <span id="regimeStatus" class="status-value">—</span>
+              </span>
+            </div>
+            <div class="status-item">
+              <span class="status-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 19.5 7v5c0 4.8-3.2 7.5-7.5 8.8C7.7 19.5 4.5 16.8 4.5 12V7L12 3.5Z" stroke="currentColor" stroke-width="1.8"/><path d="m8.5 12.4 2.2 2.2 4.8-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="status-copy">
+                <span class="status-label">Miche stability</span>
+                <span id="stabilityStatus" class="status-value">—</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="hero-grid">
+            <article class="metric-card featured">
+              <span class="metric-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 15c2.7 0 2.7-4 5.4-4s2.7 4 5.4 4 2.7-4 5.2-4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M4 19h16M12 4v5m-2-2 2 2 2-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="metric-label">Significant wave height, Hs</span>
+              <span id="hsResult" class="metric-value">—</span>
+            </article>
+            <article class="metric-card">
+              <span class="metric-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="metric-label">Significant wave period, Ts</span>
+              <span id="tsResult" class="metric-value">—</span>
+            </article>
+            <article class="metric-card">
+              <span class="metric-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 12h16M6.5 9.5 4 12l2.5 2.5M17.5 9.5 20 12l-2.5 2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="metric-label">Wavelength, L</span>
+              <span id="lengthResult" class="metric-value">—</span>
+            </article>
+            <article class="metric-card">
+              <span class="metric-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 15c2.7 0 2.7-4 5.4-4s2.7 4 5.4 4 2.7-4 5.2-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m13 5 5 3-5 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="metric-label">Wave celerity, C</span>
+              <span id="celerityResult" class="metric-value">—</span>
+            </article>
+          </div>
+
+          <div class="analysis-grid">
+            <section class="subpanel">
+              <div class="subpanel-head">
+                <h3>Hydrodynamic profile</h3>
+                <span class="subpanel-note">Schematic, calculated labels</span>
+              </div>
+              <div class="wave-stage">
+                <svg id="waveSvg" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-label="Schematic wave profile showing significant wave height, wavelength and water depth">
+                  <defs>
+                    <linearGradient id="waveStroke" x1="0" x2="1">
+                      <stop offset="0" stop-color="#37a4ff"/>
+                      <stop offset="0.5" stop-color="#76c6ff"/>
+                      <stop offset="1" stop-color="#46e1ff"/>
+                    </linearGradient>
+                    <linearGradient id="waterFillGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stop-color="#1674bd" stop-opacity="0.34"/>
+                      <stop offset="0.62" stop-color="#0a3155" stop-opacity="0.42"/>
+                      <stop offset="1" stop-color="#041322" stop-opacity="0.84"/>
+                    </linearGradient>
+                    <marker id="arrowEnd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                      <path d="M0 0 10 5 0 10Z" fill="#dcecff" opacity="0.72"/>
+                    </marker>
+                  </defs>
+                  <g aria-hidden="true">
+                    <line class="wave-grid-line" x1="0" y1="70" x2="1000" y2="70"/>
+                    <line class="wave-grid-line" x1="0" y1="140" x2="1000" y2="140"/>
+                    <line class="wave-grid-line" x1="0" y1="210" x2="1000" y2="210"/>
+                    <line class="wave-grid-line" x1="200" y1="0" x2="200" y2="320"/>
+                    <line class="wave-grid-line" x1="400" y1="0" x2="400" y2="320"/>
+                    <line class="wave-grid-line" x1="600" y1="0" x2="600" y2="320"/>
+                    <line class="wave-grid-line" x1="800" y1="0" x2="800" y2="320"/>
+                  </g>
+                  <path id="waterFill" d="M0 130 L1000 130 L1000 320 L0 320 Z"/>
+                  <path id="waveSurfaceGlow" d="M0 130 L1000 130"/>
+                  <path id="waveSurface" d="M0 130 L1000 130"/>
+                  <line id="seabed" x1="0" y1="282" x2="1000" y2="282"/>
+                  <line id="heightMeasure" class="measure-line" x1="82" y1="100" x2="82" y2="160" marker-start="url(#arrowEnd)" marker-end="url(#arrowEnd)"/>
+                  <text id="heightText" class="measure-text" x="96" y="132">Hs —</text>
+                  <line id="lengthMeasure" class="measure-line" x1="280" y1="63" x2="700" y2="63" marker-start="url(#arrowEnd)" marker-end="url(#arrowEnd)"/>
+                  <text id="lengthText" class="measure-text" x="490" y="48" text-anchor="middle">L —</text>
+                  <line id="depthMeasure" class="measure-line" x1="910" y1="132" x2="910" y2="280" marker-start="url(#arrowEnd)" marker-end="url(#arrowEnd)"/>
+                  <text id="depthText" class="measure-text" x="892" y="210" text-anchor="end">d —</text>
+                  <text id="profileCaption" class="measure-subtext" x="22" y="300">Calculated wave state</text>
+                </svg>
+              </div>
+            </section>
+
+            <section class="subpanel">
+              <div class="subpanel-head">
+                <h3>Calculated diagnostics</h3>
+                <span class="subpanel-note">Original engine values</span>
+              </div>
+              <div class="detail-list">
+                <div class="detail-row"><span class="detail-label">Adjusted wind speed, Ua</span><span id="uaDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span class="detail-label">Wave number, k</span><span id="kDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span class="detail-label">Calculated steepness, H/L</span><span id="steepnessDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span class="detail-label">Miche steepness limit</span><span id="micheDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span class="detail-label">Stability margin</span><span id="marginDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span id="limitingLabel" class="detail-label">Minimum duration required</span><span id="limitingDetail" class="detail-value">—</span></div>
+                <div class="detail-row"><span class="detail-label">Depth ratio, Hs/d</span><span id="depthRatioDetail" class="detail-value">—</span></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="subpanel scenario-panel">
+            <div class="subpanel-head">
+              <h3>Scenario comparison</h3>
+              <span class="subpanel-note">The lower potential Hs controls</span>
+            </div>
+            <div class="scenario-body">
+              <article class="scenario-card">
+                <div class="scenario-top">
+                  <h4 class="scenario-title">A · Fetch-limited potential</h4>
+                  <span id="fetchTag" class="scenario-tag">Potential</span>
+                </div>
+                <div class="scenario-stats">
+                  <div class="scenario-stat"><span class="s-label">Hs</span><span id="fetchHs" class="s-value">—</span></div>
+                  <div class="scenario-stat"><span class="s-label">Ts</span><span id="fetchTs" class="s-value">—</span></div>
+                  <div class="scenario-stat"><span class="s-label">Time to develop</span><span id="fetchTime" class="s-value">—</span></div>
+                </div>
+                <div class="bar-track" aria-hidden="true"><div id="fetchBar" class="bar-fill"></div></div>
+              </article>
+              <article class="scenario-card">
+                <div class="scenario-top">
+                  <h4 class="scenario-title">B · Duration-limited potential</h4>
+                  <span id="durationTag" class="scenario-tag">Potential</span>
+                </div>
+                <div class="scenario-stats">
+                  <div class="scenario-stat"><span class="s-label">Hs</span><span id="durationHs" class="s-value">—</span></div>
+                  <div class="scenario-stat"><span class="s-label">Ts</span><span id="durationTs" class="s-value">—</span></div>
+                  <div class="scenario-stat"><span class="s-label">Equivalent fetch</span><span id="equivalentFetch" class="s-value">—</span></div>
+                </div>
+                <div class="bar-track" aria-hidden="true"><div id="durationBar" class="bar-fill"></div></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="reportSection" class="subpanel report-panel">
+            <div class="report-toolbar">
+              <div class="report-heading-wrap">
+                <h3>Technical calculation report</h3>
+                <p>Formatting and section order reproduce the original C++ report.</p>
+              </div>
+              <div class="toolbar-actions">
+                <button id="copyButton" class="icon-button" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.8"/></svg>
+                  Copy
+                </button>
+                <button id="downloadButton" class="icon-button" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v10m-4-4 4 4 4-4M5 19h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  Download report.txt
+                </button>
+                <button id="printButton" class="icon-button" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 8V4h10v4M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" stroke="currentColor" stroke-width="1.8"/><path d="M7 14h10v6H7z" stroke="currentColor" stroke-width="1.8"/></svg>
+                  Print
+                </button>
+                <span id="statusText" class="status-text" aria-live="polite"></span>
+              </div>
+            </div>
+            <pre id="reportOutput" tabindex="0" aria-live="polite"></pre>
+          </section>
+
+          <details class="methodology">
+            <summary>Calculation methodology embedded in this file</summary>
+            <div class="methodology-content">
+              <article class="formula-card">
+                <h4>Wind-stress adjustment</h4>
+                <p>The standard 10 m wind speed is converted to the adjusted wind speed used by the SMB curves.</p>
+                <span class="equation">Ua = 0.71 · U10<sup>1.23</sup></span>
+              </article>
+              <article class="formula-card">
+                <h4>Unified wave growth</h4>
+                <p>Dimensionless fetch and depth are evaluated with the Hurdle–Stive hyperbolic-tangent formulation for Hs and Ts.</p>
+                <span class="equation">F̂ = gF/Ua² &nbsp;·&nbsp; d̂ = gd/Ua²</span>
+              </article>
+              <article class="formula-card">
+                <h4>Duration limitation</h4>
+                <p>A finite storm duration is converted into an equivalent fetch, then passed through the same wave-growth equations.</p>
+                <span class="equation">F̂eff = [(gt/Ua) / 65.9]<sup>3/2</sup></span>
+              </article>
+              <article class="formula-card">
+                <h4>Dispersion and stability</h4>
+                <p>Finite-depth wavelength is solved by Newton–Raphson. The calculated H/L is checked against the Miche limit.</p>
+                <span class="equation">L = gT²/(2π) · tanh(2πd/L) &nbsp;·&nbsp; H/L ≤ 0.142 tanh(kd)</span>
+              </article>
+            </div>
+          </details>
+        </div>
+      </section>
+    </section>
+
+    <footer>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 15c2.7 0 2.7-4 5.4-4s2.7 4 5.4 4 2.7-4 5.2-4M4 19c2.7 0 2.7-2.5 5.4-2.5S12.1 19 14.8 19s2.7-2.5 5.2-2.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+      Single-file HTML application · no external libraries, images, fonts or data files.
+    </footer>
+  </main>
+
+  <script>
+    "use strict";
+
+    // Exact constants and numerical logic ported from calculator_gui.cpp.
+    const G_STD = 9.8066;
+    const PI = Math.PI;
+
+    const $ = (id) => document.getElementById(id);
+    let lastSimulation = null;
+    let lastReport = "";
+    let statusTimer = null;
+
+    class StringLogger {
+      constructor() {
+        this.buffer = "";
+        this.widthLabel = 25;
+        this.widthValue = 12;
+        this.widthUnit = 8;
+        this.lineLength = 60;
+      }
+
+      printHeader(title) {
+        this.buffer += "=".repeat(this.lineLength) + "\n";
+        this.buffer += `  ${title}\n`;
+        this.buffer += "=".repeat(this.lineLength) + "\n";
+      }
+
+      printSubheader(title) {
+        this.buffer += "\n" + "-".repeat(this.lineLength) + "\n";
+        this.buffer += `  ${title}\n`;
+        this.buffer += "-".repeat(this.lineLength) + "\n";
+      }
+
+      printRow(description, value, unit) {
+        const numeric = Math.abs(value) < 1e-9 ? "0.00" : Number(value).toFixed(4);
+        this.buffer += "  "
+          + String(description).padEnd(this.widthLabel, " ") + " : "
+          + numeric.padEnd(this.widthValue, " ")
+          + String(unit).padEnd(this.widthUnit, " ") + "\n";
+      }
+
+      printString(description, value, unit = "") {
+        this.buffer += "  "
+          + String(description).padEnd(this.widthLabel, " ") + " : "
+          + String(value).padEnd(this.widthValue, " ")
+          + String(unit).padEnd(this.widthUnit, " ") + "\n";
+      }
+
+      printText(text) {
+        this.buffer += `  ${text}\n`;
+      }
+
+      newline() {
+        this.buffer += "\n";
+      }
+
+      getContent() {
+        return this.buffer;
+      }
+    }
+
+    class SMBEngine {
+      static calculateAdjustedWindSpeed(U10) {
+        return 0.71 * Math.pow(U10, 1.23);
+      }
+
+      static calculateDeepWater(Ua, fetchM) {
+        const dimensionlessFetch = (G_STD * fetchM) / (Ua * Ua);
+
+        const heightFetchTerm = 4.3e-5 * dimensionlessFetch;
+        const gHsU2 = 0.25 * Math.pow(Math.tanh(heightFetchTerm), 0.5);
+        const Hs = gHsU2 * ((Ua * Ua) / G_STD);
+
+        const periodFetchTerm = 4.1e-5 * dimensionlessFetch;
+        const gTsU = 8.3 * Math.pow(Math.tanh(periodFetchTerm), 1.0 / 3.0);
+        const Ts = gTsU * (Ua / G_STD);
+
+        const dimensionlessDuration = 65.9 * Math.pow(dimensionlessFetch, 2.0 / 3.0);
+        const minimumDurationHours = (dimensionlessDuration * Ua / G_STD) / 3600.0;
+
+        return { Hs, Ts, t_min: minimumDurationHours, equiv_fetch: 0.0 };
+      }
+
+      static calculateDepthLimited(Ua, fetchM, depth) {
+        const dimensionlessFetch = (G_STD * fetchM) / (Ua * Ua);
+        const dimensionlessDepth = (G_STD * depth) / (Ua * Ua);
+
+        let heightDepthTerm = Math.tanh(0.6 * Math.pow(dimensionlessDepth, 0.75));
+        if (heightDepthTerm < 1e-6) heightDepthTerm = 1e-6;
+
+        const heightFetchInner = (4.3e-5 * dimensionlessFetch) / (heightDepthTerm * heightDepthTerm);
+        const gHsU2 = 0.25 * heightDepthTerm * Math.pow(Math.tanh(heightFetchInner), 0.5);
+        const Hs = gHsU2 * ((Ua * Ua) / G_STD);
+
+        let periodDepthTerm = Math.tanh(0.76 * Math.pow(dimensionlessDepth, 0.375));
+        if (periodDepthTerm < 1e-6) periodDepthTerm = 1e-6;
+
+        const periodFetchInner = (4.1e-5 * dimensionlessFetch) / Math.pow(periodDepthTerm, 3.0);
+        const gTsU = 8.3 * periodDepthTerm * Math.pow(Math.tanh(periodFetchInner), 1.0 / 3.0);
+        const Ts = gTsU * (Ua / G_STD);
+
+        const dimensionlessDuration = 65.9 * Math.pow(dimensionlessFetch, 2.0 / 3.0);
+        const minimumDurationHours = (dimensionlessDuration * Ua / G_STD) / 3600.0;
+
+        return { Hs, Ts, t_min: minimumDurationHours, equiv_fetch: 0.0 };
+      }
+
+      static calculateDurationLimited(Ua, durationHours, depth, isDeep) {
+        const durationSeconds = durationHours * 3600.0;
+        const dimensionlessDuration = (G_STD * durationSeconds) / Ua;
+        const dimensionlessEquivalentFetch = Math.pow(dimensionlessDuration / 65.9, 1.5);
+        const equivalentFetchM = dimensionlessEquivalentFetch * ((Ua * Ua) / G_STD);
+
+        const result = isDeep
+          ? SMBEngine.calculateDeepWater(Ua, equivalentFetchM)
+          : SMBEngine.calculateDepthLimited(Ua, equivalentFetchM, depth);
+
+        result.equiv_fetch = equivalentFetchM / 1000.0;
+        result.t_min = durationHours;
+        return result;
+      }
+
+      static solveDispersion(T, depth, tolerance = 1e-15, maximumIterations = 100) {
+        if (depth <= 0) return 0.0;
+
+        const omega = (2.0 * PI) / T;
+        const k0 = (omega * omega) / G_STD;
+        const k0h = k0 * depth;
+        if (k0h <= 0) return 0.0;
+
+        let kh = k0h / Math.tanh(Math.pow(6.0 / 5.0, k0h) * Math.sqrt(k0h));
+
+        for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
+          const tanhKh = Math.tanh(kh);
+          const f = k0h - kh * tanhKh;
+          const sech = Math.abs(kh) > 350 ? 0.0 : 1.0 / Math.cosh(kh);
+          const derivative = -tanhKh - kh * (sech * sech);
+
+          if (Math.abs(derivative) < 1e-15) break;
+
+          const deltaKh = f / derivative;
+          const khNew = kh - deltaKh;
+
+          if (Math.abs(deltaKh / kh) < tolerance) return khNew;
+          kh = khNew;
+        }
+
+        return kh;
+      }
+    }
+
+    function runSimulation(inputs) {
+      const log = new StringLogger();
+      log.printHeader("SMB WAVE PREDICTION REPORT");
+      log.printText("Methodology: Revised SMB");
+      log.printText("Ref: Hurdle & Stive (1989) Unified Formulations");
+
+      const Ua = SMBEngine.calculateAdjustedWindSpeed(inputs.U10);
+      const fetchM = inputs.fetch_km * 1000.0;
+      const deepWater = inputs.depth_m < 0;
+      const infiniteDuration = inputs.duration_hr < 0;
+
+      const fetchPotential = deepWater
+        ? SMBEngine.calculateDeepWater(Ua, fetchM)
+        : SMBEngine.calculateDepthLimited(Ua, fetchM, inputs.depth_m);
+
+      const durationValue = infiniteDuration ? 1e9 : inputs.duration_hr;
+      const durationPotential = SMBEngine.calculateDurationLimited(Ua, durationValue, inputs.depth_m, deepWater);
+
+      let finalHs;
+      let finalTs;
+      let controlMessage;
+      let relevantDuration;
+      let relevantFetch;
+      let durationLabel;
+      let fetchLabel;
+
+      if (fetchPotential.Hs <= durationPotential.Hs) {
+        finalHs = fetchPotential.Hs;
+        finalTs = fetchPotential.Ts;
+        controlMessage = "FETCH-LIMITED";
+        relevantDuration = fetchPotential.t_min;
+        durationLabel = "Min Duration Req.";
+        relevantFetch = inputs.fetch_km;
+        fetchLabel = "Given Fetch";
+      } else {
+        finalHs = durationPotential.Hs;
+        finalTs = durationPotential.Ts;
+        controlMessage = "DURATION-LIMITED";
+        relevantDuration = inputs.duration_hr;
+        durationLabel = "Given Duration";
+        relevantFetch = durationPotential.equiv_fetch;
+        fetchLabel = "Equivalent Fetch";
+      }
+
+      let k;
+      let wavelength;
+      let kh;
+      let actualDepth;
+
+      if (deepWater) {
+        wavelength = (G_STD * finalTs * finalTs) / (2 * PI);
+        k = (2 * PI) / wavelength;
+        kh = 100.0;
+        actualDepth = 1e9;
+      } else {
+        actualDepth = inputs.depth_m;
+        kh = SMBEngine.solveDispersion(finalTs, actualDepth);
+        k = kh / actualDepth;
+        wavelength = (2 * PI) / k;
+      }
+
+      const celerity = wavelength / finalTs;
+
+      log.printSubheader("1. INPUT PARAMETERS");
+      log.printRow("Wind Speed (U10)", inputs.U10, "m/s");
+      log.printRow("Adjusted Speed (Ua)", Ua, "m/s");
+      log.printRow("Fetch Length (F)", inputs.fetch_km, "km");
+
+      if (infiniteDuration) log.printString("Storm Duration (t_act)", "Infinite", "hours");
+      else log.printRow("Storm Duration (t_act)", inputs.duration_hr, "hours");
+
+      if (deepWater) log.printString("Water Depth (d)", "Deep Water", "-");
+      else log.printRow("Water Depth (d)", inputs.depth_m, "m");
+
+      log.printSubheader("2. LIMITING CONDITIONS");
+      log.printString(">> Controlling Factor", controlMessage);
+      log.printText(">> Determining Parameters:");
+
+      if (infiniteDuration && controlMessage === "FETCH-LIMITED") {
+        log.printRow(`   ${durationLabel}`, relevantDuration, "hours");
+      } else if (infiniteDuration) {
+        log.printString(`   ${durationLabel}`, "Infinite", "hours");
+      } else {
+        log.printRow(`   ${durationLabel}`, relevantDuration, "hours");
+      }
+      log.printRow(`   ${fetchLabel}`, relevantFetch, "km");
+
+      log.printSubheader("3. PREDICTION RESULTS");
+      log.printRow("Sig. Wave Height (Hs)", finalHs, "m");
+      log.printRow("Sig. Wave Period (Ts)", finalTs, "s");
+      log.printRow("Wave Celerity (C)", celerity, "m/s");
+      log.printRow("Wave Length (L)", wavelength, "m");
+      log.printRow("Wave Number (k)", k, "rad/m");
+
+      log.printSubheader("4. INSIGHTS & OBSERVATIONS");
+
+      if (controlMessage === "FETCH-LIMITED") {
+        log.printText(">> State: Fully Developed for Fetch.");
+        log.printText("   Waves have reached maximum size for this distance.");
+      } else {
+        log.printText(">> State: Growing Sea State (Duration Limited).");
+        log.printText("   Waves are still growing over time.");
+      }
+
+      let regime;
+      const depthWavelengthRatio = deepWater ? 1.0 : actualDepth / wavelength;
+      if (depthWavelengthRatio >= 0.5) regime = "Deep Water (d/L > 0.5)";
+      else if (depthWavelengthRatio < 0.05) regime = "Shallow Water (d/L < 0.05)";
+      else regime = "Transitional/Intermediate";
+
+      log.printString(">> Flow Regime", regime);
+
+      const steepness = finalHs / wavelength;
+      const limitingSteepness = 0.142 * Math.tanh(kh);
+
+      log.printRow("   Calculated Steepness", steepness, "-");
+      log.printRow("   Miche Limit (H/L)", limitingSteepness, "-");
+
+      let breakingStatus;
+      let stabilityMargin = null;
+      if (steepness > limitingSteepness) {
+        breakingStatus = "UNSTABLE / BREAKING [!]";
+        log.printString(">> Breaking Status", breakingStatus, "");
+        log.printText("   Wave height exceeds the Miche stability limit.");
+      } else {
+        breakingStatus = "STABLE";
+        log.printString(">> Breaking Status", breakingStatus, "");
+        stabilityMargin = (1.0 - steepness / limitingSteepness) * 100.0;
+        log.printRow("   Stability Margin", stabilityMargin, "%");
+      }
+
+      const depthRatio = deepWater ? null : finalHs / actualDepth;
+      if (!deepWater) log.printRow("   Depth Ratio (Hs/d)", depthRatio, "-");
+
+      log.printSubheader("5. SCENARIO ANALYSIS");
+      log.printText("[A] Fetch-Limited Potential");
+      log.printRow("    - Potential Hs", fetchPotential.Hs, "m");
+      log.printRow("    - Potential Ts", fetchPotential.Ts, "s");
+      log.printRow("    - Time to Develop", fetchPotential.t_min, "hours");
+
+      log.newline();
+      log.printText("[B] Duration-Limited Potential");
+      if (infiniteDuration) {
+        log.printText("    - Not applicable (Duration is infinite)");
+      } else {
+        log.printRow("    - Potential Hs", durationPotential.Hs, "m");
+        log.printRow("    - Potential Ts", durationPotential.Ts, "s");
+        log.printRow("    - Equiv. Fetch", durationPotential.equiv_fetch, "km");
+      }
+
+      return {
+        inputs: { ...inputs },
+        Ua,
+        deepWater,
+        infiniteDuration,
+        fetchPotential,
+        durationPotential,
+        finalHs,
+        finalTs,
+        controlMessage,
+        relevantDuration,
+        relevantFetch,
+        durationLabel,
+        fetchLabel,
+        k,
+        wavelength,
+        kh,
+        actualDepth,
+        celerity,
+        depthWavelengthRatio,
+        regime,
+        steepness,
+        limitingSteepness,
+        breakingStatus,
+        stabilityMargin,
+        depthRatio,
+        report: log.getContent()
+      };
+    }
+
+    function readPositiveNumber(id) {
+      const text = $(id).value.trim();
+      if (text === "") return NaN;
+      return Number(text);
+    }
+
+    function getInputs() {
+      return {
+        U10: readPositiveNumber("u10"),
+        fetch_km: readPositiveNumber("fetch"),
+        duration_hr: $("infiniteDuration").checked ? -1 : readPositiveNumber("duration"),
+        depth_m: $("deepWater").checked ? -1 : readPositiveNumber("depth")
+      };
+    }
+
+    function validateInputs(inputs) {
+      if (!Number.isFinite(inputs.U10) || inputs.U10 <= 0) return "Wind speed must be greater than zero.";
+      if (!Number.isFinite(inputs.fetch_km) || inputs.fetch_km <= 0) return "Fetch length must be greater than zero.";
+      if (inputs.duration_hr !== -1 && (!Number.isFinite(inputs.duration_hr) || inputs.duration_hr <= 0)) return "Finite storm duration must be greater than zero.";
+      if (inputs.depth_m !== -1 && (!Number.isFinite(inputs.depth_m) || inputs.depth_m <= 0)) return "Finite water depth must be greater than zero.";
+      return "";
+    }
+
+    function showError(message) {
+      const bar = $("errorBar");
+      bar.textContent = message;
+      bar.classList.add("visible");
+    }
+
+    function clearError() {
+      const bar = $("errorBar");
+      bar.textContent = "";
+      bar.classList.remove("visible");
+    }
+
+    function showStatus(message) {
+      clearTimeout(statusTimer);
+      $("statusText").textContent = message;
+      statusTimer = setTimeout(() => { $("statusText").textContent = ""; }, 2400);
+    }
+
+    function metric(value, digits, unit) {
+      return `${Number(value).toFixed(digits)} <small>${unit}</small>`;
+    }
+
+    function plain(value, digits, unit) {
+      return `${Number(value).toFixed(digits)} ${unit}`;
+    }
+
+    function setStatusClass(element, state) {
+      element.classList.remove("good", "warning", "danger");
+      if (state) element.classList.add(state);
+    }
+
+    function renderWaveProfile(result) {
+      const width = 1000;
+      const baseline = 122;
+      const amplitude = Math.max(19, Math.min(46, 17 + result.steepness * 430));
+      const displayWaveLength = Math.max(230, Math.min(470, 250 + result.wavelength * 2.0));
+      const pointCount = 180;
+      const points = [];
+
+      for (let index = 0; index <= pointCount; index += 1) {
+        const x = (index / pointCount) * width;
+        const y = baseline - amplitude * Math.sin((2 * PI * x) / displayWaveLength);
+        points.push([x, y]);
+      }
+
+      const surfacePath = points.map((point, index) => `${index === 0 ? "M" : "L"}${point[0].toFixed(2)} ${point[1].toFixed(2)}`).join(" ");
+      const seabedY = result.deepWater ? 304 : Math.max(242, Math.min(292, baseline + 112 + result.depthWavelengthRatio * 55));
+      const fillPath = `${surfacePath} L${width} ${seabedY} L0 ${seabedY} Z`;
+
+      $("waveSurface").setAttribute("d", surfacePath);
+      $("waveSurfaceGlow").setAttribute("d", surfacePath);
+      $("waterFill").setAttribute("d", fillPath);
+      $("seabed").setAttribute("y1", String(seabedY));
+      $("seabed").setAttribute("y2", String(seabedY));
+      $("seabed").style.opacity = result.deepWater ? "0.18" : "1";
+
+      const crestY = baseline - amplitude;
+      const troughY = baseline + amplitude;
+      $("heightMeasure").setAttribute("y1", String(crestY));
+      $("heightMeasure").setAttribute("y2", String(troughY));
+      $("heightText").setAttribute("y", String(baseline + 5));
+      $("heightText").textContent = `Hs ${result.finalHs.toFixed(2)} m`;
+
+      const lengthStart = 240;
+      const lengthEnd = Math.min(820, lengthStart + displayWaveLength);
+      $("lengthMeasure").setAttribute("x1", String(lengthStart));
+      $("lengthMeasure").setAttribute("x2", String(lengthEnd));
+      $("lengthText").setAttribute("x", String((lengthStart + lengthEnd) / 2));
+      $("lengthText").textContent = `L ${result.wavelength.toFixed(2)} m`;
+
+      $("depthMeasure").setAttribute("y1", String(baseline + 6));
+      $("depthMeasure").setAttribute("y2", String(seabedY - 3));
+      $("depthText").setAttribute("y", String((baseline + seabedY) / 2));
+      $("depthText").textContent = result.deepWater ? "Deep water" : `d ${result.inputs.depth_m.toFixed(2)} m`;
+      $("profileCaption").textContent = `${result.controlMessage} · ${result.regime}`;
+    }
+
+    function renderScenarios(result) {
+      $("fetchHs").textContent = plain(result.fetchPotential.Hs, 3, "m");
+      $("fetchTs").textContent = plain(result.fetchPotential.Ts, 3, "s");
+      $("fetchTime").textContent = plain(result.fetchPotential.t_min, 3, "h");
+
+      const fetchControls = result.controlMessage === "FETCH-LIMITED";
+      $("fetchTag").textContent = fetchControls ? "Controlling" : "Potential";
+      $("fetchTag").classList.toggle("controlling", fetchControls);
+
+      const durationControls = result.controlMessage === "DURATION-LIMITED";
+      $("durationTag").textContent = durationControls ? "Controlling" : (result.infiniteDuration ? "Not applicable" : "Potential");
+      $("durationTag").classList.toggle("controlling", durationControls);
+
+      if (result.infiniteDuration) {
+        $("durationHs").textContent = "N/A";
+        $("durationTs").textContent = "N/A";
+        $("equivalentFetch").textContent = "Infinite duration";
+      } else {
+        $("durationHs").textContent = plain(result.durationPotential.Hs, 3, "m");
+        $("durationTs").textContent = plain(result.durationPotential.Ts, 3, "s");
+        $("equivalentFetch").textContent = plain(result.durationPotential.equiv_fetch, 3, "km");
+      }
+
+      const durationHeight = result.infiniteDuration ? result.fetchPotential.Hs : result.durationPotential.Hs;
+      const maximum = Math.max(result.fetchPotential.Hs, durationHeight, 1e-9);
+      $("fetchBar").style.width = `${Math.max(3, (result.fetchPotential.Hs / maximum) * 100).toFixed(1)}%`;
+      $("durationBar").style.width = result.infiniteDuration ? "0%" : `${Math.max(3, (result.durationPotential.Hs / maximum) * 100).toFixed(1)}%`;
+    }
+
+    function renderSimulation(result) {
+      $("hsResult").innerHTML = metric(result.finalHs, 3, "m");
+      $("tsResult").innerHTML = metric(result.finalTs, 3, "s");
+      $("lengthResult").innerHTML = metric(result.wavelength, 2, "m");
+      $("celerityResult").innerHTML = metric(result.celerity, 3, "m/s");
+
+      $("controlStatus").textContent = result.controlMessage;
+      $("regimeStatus").textContent = result.regime;
+      $("stabilityStatus").textContent = result.breakingStatus;
+      setStatusClass($("controlStatus"), result.controlMessage === "FETCH-LIMITED" ? "good" : "warning");
+      setStatusClass($("regimeStatus"), "");
+      setStatusClass($("stabilityStatus"), result.breakingStatus === "STABLE" ? "good" : "danger");
+
+      $("uaDetail").textContent = plain(result.Ua, 4, "m/s");
+      $("kDetail").textContent = plain(result.k, 6, "rad/m");
+      $("steepnessDetail").textContent = result.steepness.toFixed(6);
+      $("micheDetail").textContent = result.limitingSteepness.toFixed(6);
+      $("marginDetail").textContent = result.stabilityMargin === null ? "Not available" : plain(result.stabilityMargin, 2, "%");
+      $("limitingLabel").textContent = result.controlMessage === "FETCH-LIMITED" ? "Minimum duration required" : "Equivalent fetch";
+      $("limitingDetail").textContent = result.controlMessage === "FETCH-LIMITED"
+        ? plain(result.relevantDuration, 4, "hours")
+        : plain(result.relevantFetch, 4, "km");
+      $("depthRatioDetail").textContent = result.depthRatio === null ? "Deep water" : result.depthRatio.toFixed(6);
+
+      renderWaveProfile(result);
+      renderScenarios(result);
+      $("reportOutput").textContent = result.report;
+      $("calculationStamp").textContent = "Calculated";
+    }
+
+    function calculate() {
+      clearError();
+      const inputs = getInputs();
+      const validationMessage = validateInputs(inputs);
+      if (validationMessage) {
+        showError(validationMessage);
+        return false;
+      }
+
+      try {
+        const result = runSimulation(inputs);
+        const values = [result.finalHs, result.finalTs, result.wavelength, result.celerity, result.k];
+        if (!values.every(Number.isFinite)) throw new Error("The selected inputs produced a non-finite numerical result.");
+
+        lastSimulation = result;
+        lastReport = result.report;
+        renderSimulation(result);
+        return true;
+      } catch (error) {
+        showError(`Calculation error: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    }
+
+    function updateConditionalInputs() {
+      const infinite = $("infiniteDuration").checked;
+      $("duration").disabled = infinite;
+      $("duration").placeholder = infinite ? "Infinite" : "Enter duration";
+
+      const deep = $("deepWater").checked;
+      $("depth").disabled = deep;
+      $("depth").placeholder = deep ? "Deep water" : "Enter depth";
+    }
+
+    function resetDefaults() {
+      $("u10").value = "25";
+      $("fetch").value = "45";
+      $("infiniteDuration").checked = true;
+      $("duration").value = "";
+      $("deepWater").checked = false;
+      $("depth").value = "10";
+      updateConditionalInputs();
+      calculate();
+      showStatus("Defaults restored");
+    }
+
+    async function copyReport() {
+      if (!lastReport && !calculate()) return;
+
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(lastReport);
+        } else {
+          throw new Error("Clipboard API unavailable");
+        }
+      } catch {
+        const textArea = document.createElement("textarea");
+        textArea.value = lastReport;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand("copy");
+        textArea.remove();
+      }
+
+      showStatus("Report copied");
+    }
+
+    function downloadReport() {
+      if (!lastReport && !calculate()) return;
+      const blob = new Blob([lastReport], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "report.txt";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      showStatus("report.txt downloaded");
+    }
+
+    function focusReport() {
+      $("reportSection").scrollIntoView({ behavior: "smooth", block: "start" });
+      setTimeout(() => $("reportOutput").focus({ preventScroll: true }), 450);
+    }
+
+    function configureNumberInputs() {
+      for (const id of ["u10", "fetch", "duration", "depth"]) {
+        const input = $(id);
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "-" || event.key === "−") event.preventDefault();
+        });
+        input.addEventListener("input", () => {
+          const value = Number(input.value);
+          if (input.value !== "" && Number.isFinite(value) && value < 0) input.value = "0";
+        });
+      }
+    }
+
+    $("calculatorForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      calculate();
+    });
+
+    $("infiniteDuration").addEventListener("change", updateConditionalInputs);
+    $("deepWater").addEventListener("change", updateConditionalInputs);
+    $("resetButton").addEventListener("click", resetDefaults);
+    $("focusReportButton").addEventListener("click", focusReport);
+    $("copyButton").addEventListener("click", copyReport);
+    $("downloadButton").addEventListener("click", downloadReport);
+    $("printButton").addEventListener("click", () => window.print());
+
+    document.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        calculate();
+      }
+    });
+
+    configureNumberInputs();
+    updateConditionalInputs();
+    calculate();
+  </script>
+</body>
+</html>
