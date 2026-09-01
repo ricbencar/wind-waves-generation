@@ -10,8 +10,10 @@ The prediction of wind-generated surface gravity waves constitutes one of the fu
 In modern oceanography, wave prediction is generally approached through two distinct paradigms:
 
 1.  **Spectral (Phase-Averaged) Models:** Third-generation models like **SWAN** (Simulating Waves Nearshore) and **WAVEWATCH III** solve the **Action Balance Equation**:
-    $$\frac{\partial N}{\partial t} + \nabla \cdot (\vec{c}_g N) = \frac{S}{\sigma}$$
-    Where $N$ is the wave action density, $\vec{c}_g$ is the group velocity vector, and $S$ represents source terms (wind input, quadruplet interactions, whitecapping). While physically rigorous, these models require extensive computational grids and detailed boundary conditions.
+
+$$ \frac{\partial N}{\partial t} + \nabla \cdot (\vec{c}_g N) = \frac{S}{\sigma} $$
+
+Where $N$ is the wave action density, $\vec{c}_g$ is the group velocity vector, and $S$ represents source terms (wind input, quadruplet interactions, whitecapping). While physically rigorous, these models require extensive computational grids and detailed boundary conditions.
 
 2.  **Parametric (Empirical) Models:** This software suite implements the parametric approach. Instead of solving the partial differential equation for the entire spectrum, parametric models rely on **Similarity Laws**. They assume that the wave spectrum, under constant wind forcing, maintains a self-similar shape (typically JONSWAP or Pierson-Moskowitz). This assumption allows the state of the sea to be described by simple non-dimensional relationships between total energy, peak frequency, and fetch.
 
@@ -31,9 +33,7 @@ Before 1947, wave forecasting was based on empirical correlations (e.g., Stevens
 
 They formulated the governing differential equation for the total wave energy $E$:
 
-$$
-\frac{dE}{dt} + \frac{E}{C} \frac{dC}{dt} = R_{Total} - D_{iss}
-$$
+$$ \frac{dE}{dt} + \frac{E}{C} \frac{dC}{dt} = R_{Total} - D_{iss} $$
 
 Where:
 * $E = \frac{1}{8} \rho g H^2$: The mean energy per unit surface area.
@@ -57,8 +57,10 @@ The sea surface is a stochastic, multi-scale phenomenon. To make it tractable fo
 
 * **Statistical Definition:** The average height of the highest one-third of waves in a zero-upcrossing record.
 * **Spectral Definition:** In deep water, assuming a narrow-band spectrum, wave heights follow a **Rayleigh Distribution**. Under this assumption:
-    $$H_{1/3} \approx 4 \sqrt{m_0}$$
-    Where $m_0$ is the variance (total energy) of the sea surface elevation.
+
+$$ H_{1/3} \approx 4 \sqrt{m_0} $$
+
+Where $m_0$ is the variance (total energy) of the sea surface elevation.
 
 ---
 
@@ -73,7 +75,7 @@ C.L. Bretschneider (1958) utilized vast datasets from weather ships to define th
 * **Implication:** Once a sea is fully developed, neither an increase in fetch (distance) nor an increase in duration (time) will produce larger waves. The wave field is saturated.
 
 Bretschneider established the dimensionless asymptotic limit for wave height as:
-$$\frac{g H_{1/3}}{U^2} \approx 0.282$$
+$$ \frac{g H_{1/3}}{U^2} \approx 0.282 $$
 *(Note: This coefficient was later revised to 0.25 by Hurdle & Stive to correct for instrument bias in early data).*
 
 ### 3.2 The Shore Protection Manual (1984) Standardization Limitations
@@ -82,7 +84,7 @@ The 1984 edition of the *Shore Protection Manual* (SPM) became the global standa
 #### 3.2.1 The Adjusted Wind Speed ($U_A$) Discrepancy
 The SPM attempted to account for the non-linear aerodynamics of the sea surface by defining an "Adjusted Wind Speed" $U_A$ (or wind stress factor):
 
-$$U_A = 0.71 \cdot (U_{10})^{1.23}$$
+$$ U_A = 0.71 \cdot (U_{10})^{1.23} $$
 
 * **The Original Limitation (SPM 1984):** While physically motivated to represent Friction Velocity ($u_*$), this factor was applied to equations originally calibrated against different wind parameters. As noted by Bishop, Donelan, and Kahma (1992), this led to "double-counting" the non-linearity, causing a systematic **overprediction** of wave heights by 10-20% in high wind conditions.
 * **The Hurdle & Stive (1989) Correction:** To fix this inconsistency without abandoning the $U_A$ methodology, Hurdle & Stive recalibrated the empirical coefficients. They **lowered** the wave height coefficient from 0.283 to **0.25** and adjusted the period coefficient to **8.3**.
@@ -141,22 +143,18 @@ The system is normalized using the **Adjusted Wind Speed ($U_A$)** and Gravitati
 #### 4.3.2 Significant Wave Height ($H_s$) Formula
 The unified equation for energy (height) is:
 
-$$
-\frac{g H_s}{U_A^2} = \mathbf{0.25} \cdot \tanh\left[ \underbrace{0.6 \cdot \hat{d}^{0.75}}_{\text{Depth Limit Term } K_{d1}} \right] \cdot \tanh^{0.5} \left[ \frac{\mathbf{4.3 \times 10^{-5}} \cdot \hat{F}}{\tanh^2(K_{d1})} \right]
-$$
+$$ \frac{g H_s}{U_A^2} = \mathbf{0.25} \cdot \tanh\left(0.6 \cdot \hat{d}^{0.75}\right) \cdot \tanh^{0.5} \left[ \frac{\mathbf{4.3 \times 10^{-5}} \cdot \hat{F}}{\tanh^2\left(0.6 \cdot \hat{d}^{0.75}\right)} \right] $$
 
 **Detailed Component Analysis:**
 * **The Leading Coefficient (0.25):** This is the **Asymptotic Stability Limit**. It represents the maximum dimensionless wave energy in a fully developed sea. **Important:** The SPM (1984) used 0.283 here. Hurdle & Stive **recalibrated** this down to 0.25 after finding that the SPM over-predicted wave heights by ~12%.
-* **The Depth Limit Term ($K_{d1}$):** This inner $\tanh$ function acts as a "friction valve."
-    * In **Deep Water**, $\tanh(K_{d1}) \to 1$. The depth term vanishes.
-    * In **Shallow Water**, $\tanh(K_{d1})$ becomes small, reducing the effective fetch and capping the maximum wave height.
+* **The Depth-Limiting Factor:** The factor $\tanh\left(0.6 \cdot \hat{d}^{0.75}\right)$ acts as a "friction valve."
+    * In **Deep Water**, $\tanh\left(0.6 \cdot \hat{d}^{0.75}\right) \to 1$. The depth term vanishes.
+    * In **Shallow Water**, $\tanh\left(0.6 \cdot \hat{d}^{0.75}\right)$ becomes small, reducing the effective fetch and capping the maximum wave height.
 
 #### 4.3.3 Significant Wave Period ($T_s$) Formula
 The unified equation for dispersion (period) is:
 
-$$
-\frac{g T_s}{U_A} = \mathbf{8.3} \cdot \tanh\left[ \underbrace{0.76 \cdot \hat{d}^{0.375}}_{\text{Depth Limit Term } K_{d2}} \right] \cdot \tanh^{1/3} \left[ \frac{\mathbf{4.1 \times 10^{-5}} \cdot \hat{F}}{\tanh^3(K_{d2})} \right]
-$$
+$$ \frac{g T_s}{U_A} = \mathbf{8.3} \cdot \tanh\left(0.76 \cdot \hat{d}^{0.375}\right) \cdot \tanh^{1/3} \left[ \frac{\mathbf{4.1 \times 10^{-5}} \cdot \hat{F}}{\tanh^3\left(0.76 \cdot \hat{d}^{0.375}\right)} \right] $$
 
 **Detailed Component Analysis:**
 * **The Leading Coefficient (8.3):** This represents the maximum wave period (spectral peak) in a fully developed sea. **Important:** The SPM (1984) used 7.54. Hurdle & Stive **increased** this to 8.3. This is a critical safety correction; under-predicting the wave period leads to under-estimating the wavelength and orbital velocity.
@@ -171,12 +169,16 @@ This software uses the **Effective Fetch** inversion method to ensure strict kin
 
 1.  **Calculate Minimum Duration ($t_{min}$):**
     Using the rigorous power law derived from the integration of group velocity:
-    $$t_{min} = \frac{65.9 \cdot U_A}{g} \cdot \hat{F}^{2/3}$$
+
+$$ t_{min} = \frac{65.9 \cdot U_A}{g} \cdot \hat{F}^{2/3} $$
+
 2.  **Check Condition:**
     If the actual storm duration ($t_{act}$) is less than $t_{min}$, the system is **Duration Limited**.
 3.  **Invert for Effective Fetch:**
     We solve for the "Effective Fetch" ($F_{eff}$) that would have produced the current state if the wind had blown forever.
-    $$F_{eff} = \left( \frac{t_{act} \cdot g}{65.9 \cdot U_A} \right)^{1.5} \cdot \frac{U_A^2}{g}$$
+
+$$ F_{eff} = \left( \frac{t_{act} \cdot g}{65.9 \cdot U_A} \right)^{1.5} \cdot \frac{U_A^2}{g} $$
+
 4.  **Substitute:**
     This $F_{eff}$ is then substituted back into the unified $H_s$ and $T_s$ equations (Section 4.3) to generate the final wave parameters.
 
@@ -188,9 +190,8 @@ To determine the final design sea state, the software calculates potential wave 
 1.  Calculate $H_{s, fetch}$ (Assuming infinite duration).
 2.  Calculate $H_{s, duration}$ (Assuming infinite fetch).
 3.  **Determine Controlling Condition:**
-    $$
-    H_{s, final} = \min(H_{s, fetch}, H_{s, duration})
-    $$
+
+$$ H_{s, final} = \min(H_{s, fetch}, H_{s, duration}) $$
 
 This logic ensures the model is physically conservative: a wave cannot grow larger than the fetch allows, nor larger than the duration allows.
 
@@ -201,20 +202,21 @@ This logic ensures the model is physically conservative: a wave cannot grow larg
 ### 5.1 Exact Linear Dispersion (Newton-Raphson)
 Once $T_s$ is determined, the software calculates the Wavelength ($L$). This requires solving the **Linear Dispersion Relation**:
 
-$$
-L = \frac{g T^2}{2\pi} \tanh \left( \frac{2\pi d}{L} \right)
-$$
+$$ L = \frac{g T^2}{2\pi} \tanh \left( \frac{2\pi d}{L} \right) $$
 
 This is a **transcendental equation**. To ensure both accuracy and computational efficiency, this software implements an **exact numerical solution** using the **Newton-Raphson method**, initialized by a high-precision explicit approximation.
 
 **Algorithm Steps:**
 1.  **Define parameters:** Dimensionless deep-water wavenumber $k_0 d = \frac{\omega^2 d}{g}$, where $\omega = \frac{2\pi}{T}$.
 2.  **Initialize (Carvalho, 2006):** Generate a high-quality initial guess ($kh_{init}$) to ensure rapid convergence:
-    $$kh_{init} = \frac{k_0 d}{\tanh\left( \sqrt{k_0 d} \cdot (6/5)^{(k_0 d)} \right)}$$
+
+$$ kh_{init} = \frac{k_0 d}{\tanh\left( \sqrt{k_0 d} \cdot (6/5)^{(k_0 d)} \right)} $$
+
 3.  **Define Root Function:** $f(kh) = kh \tanh(kh) - k_0 d$.
 4.  **Derive Gradient:** $f'(kh) = \tanh(kh) + kh \cdot \text{sech}^2(kh)$.
 5.  **Iterate:** Apply the update rule until the error $< 10^{-15}$:
-    $$kh_{n+1} = kh_n - \frac{f(kh_n)}{f'(kh_n)}$$
+
+$$ kh_{n+1} = kh_n - \frac{f(kh_n)}{f'(kh_n)} $$
 
 This hybrid approach combines the speed of an explicit approximation with the precision of an iterative solver, ensuring robust performance across all depth regimes ($\pi/10 < kh < \pi$).
 
@@ -229,9 +231,7 @@ Waves break when the horizontal velocity of the water particles ($u$) at the wav
 **2. The Mathematical Formulation**
 Miche derived a unified equation that defines this limiting steepness $(H/L)$ as a function of water depth:
 
-$$
-\left( \frac{H}{L} \right)_{max} = 0.142 \cdot \tanh(k d)
-$$
+$$ \left( \frac{H}{L} \right)_{max} = 0.142 \cdot \tanh(k d) $$
 
 Where:
 * $0.142 \approx 1/7$: The theoretical maximum steepness in deep water.
@@ -241,8 +241,10 @@ Where:
 This single equation governs breaking in both major regimes:
 * **Deep Water Limit ($kd > \pi$):** The $\tanh(kd)$ term approaches 1.0. The limit simplifies to $H/L \le 0.142$ (approx. $1/7$).
 * **Shallow Water Limit ($kd < \pi/10$):** The $\tanh(kd)$ term approaches $kd$. The equation simplifies to linear depth-limited breaking:
-    $$\frac{H}{L} \approx 0.142 (kd) \implies H \approx 0.142 \cdot k d \cdot L \approx 0.89 d$$
-    *(Note: While empirical indices often range from $0.78$ to $1.0$, Miche's theoretical derivation yields $\approx 0.89$).*
+
+$$ \frac{H}{L} \approx 0.142 (kd) \implies H \approx 0.142 \cdot k d \cdot L \approx 0.89 d $$
+
+*(Note: While empirical indices often range from $0.78$ to $1.0$, Miche's theoretical derivation yields $\approx 0.89$).*
 
 **4. Software Implementation**
 After calculating $H_s$ and $L$, the software calculates the current steepness ratio. If the predicted steepness exceeds the Miche limit, the software flags the sea state as **"BREAKING / UNSTABLE"**, indicating that the wind input is generating energy faster than the water surface can sustain it without dissipating via breaking.
